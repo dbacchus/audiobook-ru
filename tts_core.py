@@ -1610,14 +1610,31 @@ def add_pauses(escaped: str) -> str:
     проскакивает так, что её не разобрать. Ставим короткие паузы сами."""
     out = re.sub(r"\(", '<break time="200ms"/>(', escaped)
     out = re.sub(r"\)", ')<break time="200ms"/>', out)
-    # «е», «ё», «+» -- закавыченный кусок из одного-двух знаков
-    out = re.sub(r"([«\"'])([^«»\"']{1,2})([»\"'])",
+    # одиночная буква в кавычках: «е», «ё» -- иначе проскакивает неразличимо
+    out = re.sub(r"([«\"'])([^«»\"']{1})([»\"'])",
                  r'<break time="150ms"/>\1\2\3<break time="150ms"/>', out)
     return out
 
 
+# ровно одна буква в кавычках: «да» -- это уже реплика, её делить не нужно
+_LETTER_THEN_COMMA = re.compile(r"([«\"'][^«»\"']{1}[»\"'])\s*,\s*")
+
+
+def split_after_letter(escaped: str) -> str:
+    """Закончить предложение после закавыченной буквы.
+
+    «где решается «е» или «ё», жёлтые — где ударение» — на слух «ё»
+    пропадает: перед похожим слогом у неё нет слышимой границы. Точка
+    помогает, но менять запятую в тексте нельзя. Зато можно закрыть здесь
+    предложение в разметке: модель даст завершающую интонацию, а текст
+    останется авторским."""
+    return _LETTER_THEN_COMMA.sub(r"\1</s><s>", escaped)
+
+
 def ssml_paragraph(text: str, rate=None, pitch=None) -> str:
-    body = "".join(f"<s>{add_pauses(emphasize_caps(_xml(x)))}</s>"
+    # порядок важен: границу предложения ищем по чистому тексту, паузы
+    # добавляем после -- иначе вставленные теги разрывают шаблон
+    body = "".join(f"<s>{add_pauses(split_after_letter(emphasize_caps(_xml(x))))}</s>"
                    for x in _sentences(text))
     if rate or pitch:
         attrs = (f' rate="{rate}"' if rate else "") + (f' pitch="{pitch}"' if pitch else "")
