@@ -94,6 +94,15 @@ SAMPLE_PHRASE = ("В+етер к в+ечеру ст+их, и над вод+ой 
 
 VOWELS = "аеёиоуыэюя"
 WORD_RE = re.compile(r"[А-Яа-яЁё+]+")
+# Первое слово предложения: начало строки или после «.!?…», далее возможные
+# тире, кавычки и скобки прямой речи. Шаблон ОДИН на оба прохода (снять
+# регистр в исходнике, вернуть его в размеченном): проходы нумеруют начала
+# предложений по порядку, и совпасть они могут только при одном шаблоне.
+# Слово берём любое, вместе с возможным знаком ударения -- он может стоять
+# и перед первой буквой («+это»).
+SENTENCE_FIRST_WORD = re.compile(
+    r'(^|[.!?…]["»\')\]]*\s+)([-—–«"\'(\[\s]*)(\+?[А-Яа-яЁё][А-Яа-яЁё+]*)')
+
 # Дефис, приклеенный к предыдущему слову: так отличается постфикс «-то» в
 # «что-то» от самостоятельного «то» после тире («сказал -- то ли правда»).
 POSTFIX_TO = re.compile(r"[А-Яа-яЁё]-$")
@@ -1321,6 +1330,54 @@ class Accentizer:
             s = ("+" + s[1].upper() + s[2:]) if s.startswith("+") else (s[0].upper() + s[1:])
         return s
 
+    def _lower_initial_homographs(self, text: str) -> tuple[str, set]:
+        """Омограф в начале предложения опустить в строчные (для модели).
+
+        RUAccent принимает слово с большой буквы за имя собственное и
+        омограф в нём не разбирает: «Потом были худые годы» -> «П+отом»
+        (через пот), хотя «потом были...» -> «пот+ом». В повести так
+        испорчены все 27 «Потом» в начале фраз, а те же 57 в середине
+        разобраны верно (найдено на слух 2026-09-20).
+
+        Трогаем только слова из ЕГО же словаря омографов (19741 слово):
+        «Аня», «Кузьма», «Тихон» туда не входят и остаются как есть.
+        Возвращает текст и множество снятых слов."""
+        omo = getattr(self.acc, "omographs", None) or {}
+        if not omo:
+            return text, set()
+        lowered = set()
+
+        def sub(m):
+            w = m.group(3)
+            if not w[:1].isupper() or w.lower() not in omo:
+                return m.group(0)
+            lowered.add(w.lower())
+            return m.group(1) + m.group(2) + w[0].lower() + w[1:]
+
+        return SENTENCE_FIRST_WORD.sub(sub, text), lowered
+
+    def _restore_initial_caps(self, marked: str, lowered: set) -> str:
+        """Вернуть заглавную букву там, где мы её сняли.
+
+        Ищем по САМИМ словам, а не по порядковым номерам предложений:
+        нумерация разъезжается, если в исходнике есть markdown. В абзаце
+        «**Аня Корнева**, 15 лет. Внучка. Ноги как у цапли» звёздочки не дают
+        шаблону совпасть в начале, а в размеченном тексте их уже нет -- и
+        «Ноги» теряли заглавную. Слово в начале предложения и так должно быть
+        с большой, так что лишним это исправление быть не может."""
+        if not lowered:
+            return marked
+
+        def sub(m):
+            w = m.group(3)
+            # знак ударения может стоять перед первой буквой: «+это»
+            i = 1 if w.startswith("+") else 0
+            if w.replace("+", "").lower() not in lowered:
+                return m.group(0)
+            return m.group(1) + m.group(2) + w[:i] + w[i].upper() + w[i + 1:]
+
+        return SENTENCE_FIRST_WORD.sub(sub, marked)
+
     def fix_monosyllables(self, text: str) -> str:
         out = []
         for sent in re.split(r"(?<=[.!?…])\s+", text):
@@ -1363,7 +1420,9 @@ class Accentizer:
             text = expand_numbers(text)
         if self.acc is None:
             return self.apply_dictionary(text)
-        raw = self._keep_author_yo(text, self._raw(text))
+        lowered, caps = self._lower_initial_homographs(text)
+        raw = self._restore_initial_caps(self._raw(lowered), caps)
+        raw = self._keep_author_yo(text, raw)
         # RUAccent считает «(» пунктуацией и убирает пробел перед ней
         # («Перемена (хронология)» -> «Перемена(хронология)»), а Silero скобку
         # выбрасывает -- слова склеились бы в одно. Возвращаем пробел.
