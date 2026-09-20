@@ -1574,9 +1574,14 @@ def run_selftest():
         wav = os.path.join(tempfile.gettempdir(), "audiobook_selftest.wav")
         mp3 = wav[:-4] + ".mp3"
         core.write_wav(wav, pcm)
-        made = core.to_mp3(wav, mp3, "Проверка", 1, log=log)
-        log(f"mp3: {'собран' if made else 'НЕ СОБРАН'}")
-        ok = ok and made
+        if core.ffmpeg_exe():
+            made = core.to_mp3(wav, mp3, "Проверка", 1, log=log)
+            log(f"mp3: {'собран' if made else 'НЕ СОБРАН'}")
+            ok = ok and made
+        else:
+            # в свежей сборке ffmpeg ещё не скачан -- это не поломка
+            log("mp3: не проверен, ffmpeg пока не установлен "
+                "(программа предложит скачать его при первой озвучке)")
     except Exception:
         ok = False
         lines.append(traceback.format_exc())

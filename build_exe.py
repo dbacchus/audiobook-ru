@@ -173,13 +173,15 @@ def copy_extras():
         shutil.copytree(src, dst)
 
 
-def make_zip():
-    """Архив для переноса. 7-Zip жмёт заметно лучше и быстрее обычного zip."""
+def make_zip(prefer_zip=False):
+    """Архив для переноса. 7-Zip жмёт заметно лучше, но zip открывается
+    в Windows без всяких программ -- для раздачи людям это важнее."""
     print("упаковка (это долго) ...")
     t0 = time.time()
-    seven = next((p for p in (r"C:\Program Files\7-Zip\7z.exe",
-                              r"C:\Program Files (x86)\7-Zip\7z.exe")
-                  if os.path.exists(p)), None)
+    seven = None if prefer_zip else next(
+        (p for p in (r"C:\Program Files\7-Zip\7z.exe",
+                     r"C:\Program Files (x86)\7-Zip\7z.exe")
+         if os.path.exists(p)), None)
     if seven:
         archive = os.path.join(APP_DIR, "dist", NAME + ".7z")
         if os.path.exists(archive):
@@ -215,4 +217,5 @@ if __name__ == "__main__":
     print(f"\nГотово: {DIST}")
     print(f"Размер папки: {mb(DIST):.0f} МБ")
     if "--zip" in sys.argv:
-        make_zip()
+        # для релиза нужен именно zip: он открывается в Windows сам по себе
+        make_zip(prefer_zip="--release" in sys.argv)
