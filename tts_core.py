@@ -392,11 +392,40 @@ def parse_text(text: str, epigraph: bool = True, split_chapters: bool = False):
     pre_chapter = epigraph and has_chapter
     n_epi = 0
     pending = None                 # заголовок «Часть», ждущий свою главу
+    buf = []                       # строки одного абзаца
+    # В тексте, перенесённом по ширине, строки внутри абзаца примерно равной
+    # длины, а последняя короче. По этому и отличаем конец абзаца от переноса.
+    widths = sorted(len(l.rstrip()) for l in lines_ if l.strip())
+    wrap_width = widths[len(widths) // 2] if widths else 0
+    short_line = wrap_width * 0.75 if wrap_width >= 40 else 0
+
+    def flush():
+        """Сложить накопленные строки в один абзац.
+
+        Текст часто перенесён по ширине страницы, и тогда каждая строка --
+        не абзац, а его кусок. Если считать строки абзацами, чтец делает
+        паузу посреди предложения. Абзац кончается пустой строкой,
+        заголовком или разделителем сцены."""
+        nonlocal n_epi, pre_chapter
+        if not buf:
+            return
+        s = strip_markdown(" ".join(buf))
+        buf.clear()
+        if not s:
+            return
+        if pre_chapter:
+            n_epi += 1
+            if n_epi > MAX_EPIGRAPH_PARS:
+                pre_chapter = False
+        cur.append(("epigraph" if pre_chapter else "par", s))
+
     for raw in lines_:
         s = raw.strip()
         if not s:
+            flush()
             continue
         if s.startswith("#"):
+            flush()
             title = strip_markdown(s.lstrip("#").strip())
             if not title:
                 continue
@@ -418,16 +447,13 @@ def parse_text(text: str, epigraph: bool = True, split_chapters: bool = False):
                 cur_title = title
             cur.append(("title", title))
         elif s in BREAK_MARKERS:
+            flush()
             cur.append(("brk", None))
         else:
-            s = strip_markdown(s)
-            if not s:
-                continue
-            if pre_chapter:
-                n_epi += 1
-                if n_epi > MAX_EPIGRAPH_PARS:
-                    pre_chapter = False
-            cur.append(("epigraph" if pre_chapter else "par", s))
+            buf.append(s)
+            if short_line and len(s) < short_line:
+                flush()            # короткая строка -- конец абзаца, а не перенос
+    flush()
     if cur:
         sections.append((cur_title or "Без названия", cur))
 
@@ -524,6 +550,13 @@ LATIN_WORDS = {
     "pip": "пип", "cpu": "си пи ю", "gpu": "джи пи ю", "ram": "р+ам",
     "with": "виз", "py": "пай", "md": "эм ди", "sha": "ш+а", "url": "ю ар эль",
     "http": "эйч ти ти пи", "https": "эйч ти ти пи +эс",
+    # расширения и имена файлов, как их называют по-русски
+    "txt": "т+экст", "acc": "+акк", "log": "лог", "ini": "+ини",
+    "audio": "+аудио", "video": "в+идео", "folder": "ф+олдер",
+    "edits": "+эдитс", "cache": "кэш", "json": "джейс+он",
+    # как произносит сам автор; пишем слитно, иначе правило односложных
+    # слов добавит ударение ещё и на «дэ», и нажима станет два
+    "dbacchus": "деб+ахус",
 }
 # названия латинских букв, как их читают в аббревиатурах
 LATIN_LETTERS = {"a": "эй", "b": "би", "c": "си", "d": "ди", "e": "и",
@@ -716,6 +749,10 @@ def normalize_latin(text: str):
     out = re.sub(r"(?<=[A-Za-z0-9])[_/](?=[A-Za-z0-9])", " ", out)
     out = re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", out)
     out = re.sub(r"(?<=\d)\.(?=\d)", " т+очка ", out)     # «3.10» -> «три точка десять»
+    # точка перед расширением: «Аудиокнига.exe» иначе звучит как конец
+    # предложения, а «(.txt или .md)» слипается в одно слово
+    out = re.sub(r"(?<=[А-Яа-яЁё0-9])\.(?=[A-Za-z])", " т+очка ", out)
+    out = re.sub(r"(?<=[\s(«\"'])\.(?=[A-Za-z])", "т+очка ", out)
     return latin_to_cyrillic(out), found
 
 
@@ -929,6 +966,33 @@ def expand_numbers(text: str) -> str:
         return before + words + after
     text = re.sub(r"([А-Яа-яЁё]+ )?\b(\d+)(\s+[А-Яа-яЁё]+)?", plain_num, text)
     return text
+
+
+# Сокращения, которые модель проговаривает невнятно: две заглавные буквы она
+# читает как слог. Разворачиваем в слова -- «73 МБ» должно звучать полностью.
+ABBR_RU = {
+    "МБ": "мегаб+айт", "ГБ": "гигаб+айт", "КБ": "килоб+айт", "ТБ": "тераб+айт",
+    "Кб": "килоб+айт", "Мб": "мегаб+айт", "Гб": "гигаб+айт",
+    "кг": "килогр+амм", "мм": "миллим+етр", "см": "сантим+етр",
+    "км": "килом+етр", "мин": "мин+ут", "сек": "сек+унд",
+}
+# Стрелки и прочие значки: модель их выбрасывает, и фраза склеивается.
+SIGNS = {"->": ",", "→": ",", "=>": ",", "<-": ",", "←": ",",
+         "±": "пл+юс-м+инус", "×": "на", "≈": "пр+иблизительно",
+         "№": "н+омер", "%": "проц+ентов", "&": "и", "@": "соб+ака"}
+
+
+def expand_signs(text: str) -> str:
+    """Значки и сокращения -- словами, иначе они просто пропадают."""
+    text = text.replace("--", " — ")                  # двойной дефис -- это тире
+    text = re.sub(r"(?<=\d)\.(?=\d)", " т+очка ", text)   # «1.0» -> «один точка ноль»
+    for sign, word in SIGNS.items():
+        if sign in text:
+            text = text.replace(sign, f" {word} " if word.isalpha() else word + " ")
+    def abbr(m):
+        return ABBR_RU.get(m.group(0), m.group(0))
+    return re.sub(r"(?<![А-Яа-яЁё])(" + "|".join(ABBR_RU) + r")(?![А-Яа-яЁё])",
+                  abbr, text)
 
 
 def mark_first_vowel(plain: str) -> str:
@@ -1242,6 +1306,7 @@ class Accentizer:
 
     def process(self, text: str) -> str:
         """Полная цепочка для одного куска текста."""
+        text = expand_signs(text)
         text, latin = normalize_latin(text)
         if latin:
             self.log("Латиница заменена: " + ", ".join(dict.fromkeys(latin))[:120])
@@ -1537,8 +1602,23 @@ def emphasize_caps(escaped: str) -> str:
                    if _is_caps_word(m.group(0)) else m.group(0)), escaped)
 
 
+def add_pauses(escaped: str) -> str:
+    """Паузы там, где их даёт не пунктуация, а вид текста.
+
+    Скобки и кавычки модель выбрасывает вместе с их интонацией: вставка
+    в скобках сливается с фразой, а закавыченная буква («е» или «ё»)
+    проскакивает так, что её не разобрать. Ставим короткие паузы сами."""
+    out = re.sub(r"\(", '<break time="200ms"/>(', escaped)
+    out = re.sub(r"\)", ')<break time="200ms"/>', out)
+    # «е», «ё», «+» -- закавыченный кусок из одного-двух знаков
+    out = re.sub(r"([«\"'])([^«»\"']{1,2})([»\"'])",
+                 r'<break time="150ms"/>\1\2\3<break time="150ms"/>', out)
+    return out
+
+
 def ssml_paragraph(text: str, rate=None, pitch=None) -> str:
-    body = "".join(f"<s>{emphasize_caps(_xml(x))}</s>" for x in _sentences(text))
+    body = "".join(f"<s>{add_pauses(emphasize_caps(_xml(x)))}</s>"
+                   for x in _sentences(text))
     if rate or pitch:
         attrs = (f' rate="{rate}"' if rate else "") + (f' pitch="{pitch}"' if pitch else "")
         body = f"<prosody{attrs}>{body}</prosody>"
