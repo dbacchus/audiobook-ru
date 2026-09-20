@@ -33,7 +33,7 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-VERSION = "1.3"
+VERSION = "1.4"
 SAMPLE_RATE = 48000
 # Предел у модели не по символам, а по длительности генерации: на «Пороге»
 # абзац в 889 знаков падал с «Model couldn't generate your text, probably it's
