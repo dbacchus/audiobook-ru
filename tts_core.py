@@ -1613,6 +1613,11 @@ def _sentences(t: str):
 # слово капсом произносится выше и медленнее, как выделяют голосом в разговоре.
 # Аббревиатуры (ГЭС, НИИ) не трогаем -- отсюда нижняя граница в четыре буквы.
 EMPHASIS = 'pitch="x-high" rate="slow"'
+# В ВОПРОСЕ замедления быть не должно: вопрос без вопросительного слова держится
+# на подъёме тона («Он завтра БУДЕТ знать?»), и растянутое слово этот подъём
+# гасит. На слух 2026-09-20: подъём без замедления выбран из десяти вариантов.
+EMPHASIS_Q = 'pitch="x-high"'
+QUESTION_END = re.compile(r'\?["»\'\)\]\s]*$')
 MIN_CAPS_LEN = 3
 CYR_UPPER = set("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ")
 # короткие слова капсом бывают и аббревиатурами -- эти читаем как обычно
@@ -1641,13 +1646,14 @@ def emphasize_caps(escaped: str) -> str:
     words = [w for w in WORD_RE.findall(escaped) if len(w.replace("+", "")) > 1]
     if not words:
         return escaped
+    emph = EMPHASIS_Q if QUESTION_END.search(escaped) else EMPHASIS
     shouted = [w for w in words if _is_caps(w) and w.replace("+", "") not in ABBREVIATIONS]
     if shouted and len(shouted) * 2 >= len(words):
-        return f"<prosody {EMPHASIS}>{escaped}</prosody>"
+        return f"<prosody {emph}>{escaped}</prosody>"
     if not any(_is_caps_word(w) for w in words):
         return escaped
     return WORD_RE.sub(
-        lambda m: (f"<prosody {EMPHASIS}>{m.group(0)}</prosody>"
+        lambda m: (f"<prosody {emph}>{m.group(0)}</prosody>"
                    if _is_caps_word(m.group(0)) else m.group(0)), escaped)
 
 
@@ -1669,6 +1675,44 @@ def add_pauses(escaped: str) -> str:
 _LETTER_THEN_COMMA = re.compile(r"([«\"'][^«»\"']{1}[»\"'])\s*,\s*")
 
 
+# Вопросительные слова во всех падежах. Вопрос С таким словом произносится
+# с ПОНИЖЕНИЕМ на нём («Что́ он сказал?»), подъём в конце был бы ошибкой;
+# вопрос БЕЗ него держится только на подъёме и иначе слышится утверждением.
+QUESTION_WORD = re.compile(
+    r"\b(чт\+?о|чег\+?о|чем\+?у|ч\+?ем|ч\+?ём|к\+?ак|как\+?ой|как\+?ая|как\+?ое"
+    r"|как\+?ие|как\+?ог\+?о|как\+?ому|как\+?им|как\+?их|как\+?ов|наск\+?олько"
+    r"|гд\+?е|куд\+?а|отк\+?уда|когд\+?а|кт\+?о|ког\+?о|ком\+?у|к\+?ем|к\+?ом"
+    r"|зач\+?ем|почем\+?у|отчег\+?о|ск\+?олько|ч\+?ей|чь\+?я|чь\+?ё|чь\+?и|ли)\b",
+    re.IGNORECASE)
+# Последнее слово перед знаком вопроса -- на нём и делается подъём.
+_LAST_BEFORE_Q = re.compile(r"([А-Яа-яЁё+]+)(\?[\"»'\)\]\s]*)$")
+
+
+def question_rise(escaped: str) -> str:
+    """Подъём тона на последнем слове вопроса без вопросительного слова.
+
+    Русская ИК-3: «Ты пойдёшь?», «Он завтра будет знать, как решать?» --
+    без подъёма модель читает их утверждением (на слух 2026-09-20, подъём
+    выиграл или сравнялся во всех шести пробах).
+
+    Не трогаем: вопросы с вопросительным словом (там понижение) и те, где
+    автор уже выделил слово капсом -- его выбор важнее общего правила."""
+    if not QUESTION_END.search(escaped) or "<prosody" in escaped:
+        return escaped
+    plain = re.sub(r"<[^>]+>", "", escaped)
+    # Сам вопрос -- это то, что после последней кавычки, скобки или двоеточия:
+    # в «Тихон спрашивает Аню: «Что во мне такого?»» начало фразы -- слова
+    # автора, а вопросительное слово стоит уже в реплике.
+    start = max(plain.rfind(c) for c in '«"(:')
+    question = plain[start + 1:] if start >= 0 else plain
+    # Внутри вопроса слово ищем в ПЕРВОЙ его части: в «Он завтра будет знать,
+    # как решать?» слово «как» сидит в придаточном, а сам вопрос начинается
+    # с «Он», и подъём ему нужен.
+    if QUESTION_WORD.search(re.split(r"[,;]", question, 1)[0]):
+        return escaped
+    return _LAST_BEFORE_Q.sub(r'<prosody pitch="x-high">\1</prosody>\2', escaped)
+
+
 def split_after_letter(escaped: str) -> str:
     """Закончить предложение после закавыченной буквы.
 
@@ -1683,7 +1727,7 @@ def split_after_letter(escaped: str) -> str:
 def ssml_paragraph(text: str, rate=None, pitch=None) -> str:
     # порядок важен: границу предложения ищем по чистому тексту, паузы
     # добавляем после -- иначе вставленные теги разрывают шаблон
-    body = "".join(f"<s>{add_pauses(split_after_letter(emphasize_caps(_xml(x))))}</s>"
+    body = "".join(f"<s>{add_pauses(split_after_letter(question_rise(emphasize_caps(_xml(x)))))}</s>"
                    for x in _sentences(text))
     if rate or pitch:
         attrs = (f' rate="{rate}"' if rate else "") + (f' pitch="{pitch}"' if pitch else "")
