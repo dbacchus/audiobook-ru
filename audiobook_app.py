@@ -1563,20 +1563,31 @@ def run_selftest():
     try:
         log(f"папка приложения: {root}")
         log(f"настройки и аудио: {APP_DIR}")
-        log(f"модель Silero:    {core.find_model_file('v5_5_ru')}")
+        log(f"модель Silero:    {core.find_model_file(core.DEFAULT_MODEL)}")
         log(f"модели RUAccent:  {core.ruaccent_workdir()}")
         log(f"ffmpeg:           {core.FFMPEG}")
 
         eng = core.Accentizer(core.load_dictionary(DICT_PATH), log=log)
         if not eng.load():
             ok = False
-        probe = "Он пошёл в мастерскую: что там, 15 лет никто не был?"
+        # Фраза-проба заодно проверяет правила, которые легко сломать
+        # незаметно: «что» после двоеточия без знака, «то» со знаком,
+        # постфикс «-то» без знака, число словами, «ё» со знаком.
+        probe = ("Он пошёл в мастерскую: что там, 15 лет никто не был? "
+                 "И то, что он увидел, было что-то новое.")
         marked = eng.process(probe)
         log(f"ударения: {marked}")
-        ok = ok and "+" in marked and "пятн+адцать" in marked
+        for must in ("пятн+адцать", "пош+ёл", "и т+о,", "чт+о-то"):
+            if must not in marked.lower():
+                log(f"ОШИБКА: в разметке нет «{must}»")
+                ok = False
 
-        synth = core.Synth("v5_5_ru", threads=2, log=log)
-        pcm = synth.say(marked, "baya")
+        # Модель берём ту же, что и программа: раньше здесь была зашита
+        # v5_5_ru, которой в свободной сборке нет -- самопроверка на чужой
+        # машине полезла бы за ней в сеть.
+        model = core.DEFAULT_MODEL
+        synth = core.Synth(model, threads=2, log=log)
+        pcm = synth.say(marked, next(iter(core.voices_for(model))))
         log(f"синтез: {len(pcm)/core.SAMPLE_RATE:.2f} c звука")
         ok = ok and len(pcm) > core.SAMPLE_RATE
 
