@@ -173,6 +173,30 @@ def copy_extras():
         shutil.copytree(src, dst)
 
 
+def make_sfx():
+    """Самораспаковывающийся архив: сжатие как у 7z, а распаковка двойным
+    кликом, без сторонних программ. Делается из модуля 7z.sfx."""
+    sfx = next((p for p in (r"C:\Program Files\7-Zip\7z.sfx",
+                            r"C:\Program Files (x86)\7-Zip\7z.sfx")
+                if os.path.exists(p)), None)
+    seven = next((p for p in (r"C:\Program Files\7-Zip\7z.exe",
+                              r"C:\Program Files (x86)\7-Zip\7z.exe")
+                  if os.path.exists(p)), None)
+    if not (sfx and seven):
+        print("  7-Zip не найден, самораспаковывающийся архив не собран")
+        return None
+    out = os.path.join(APP_DIR, "dist", NAME + "-setup.exe")
+    if os.path.exists(out):
+        os.remove(out)
+    print("сборка самораспаковывающегося архива ...")
+    t0 = time.time()
+    subprocess.run([seven, "a", "-t7z", "-mx=7", "-mmt=on", f"-sfx{sfx}", out, DIST],
+                   cwd=os.path.join(APP_DIR, "dist"),
+                   stdout=subprocess.DEVNULL, check=True)
+    print(f"  {out}: {os.path.getsize(out)/1024/1024:.0f} МБ за {time.time()-t0:.0f} c")
+    return out
+
+
 def make_zip(prefer_zip=False):
     """Архив для переноса. 7-Zip жмёт заметно лучше, но zip открывается
     в Windows без всяких программ -- для раздачи людям это важнее."""
@@ -219,3 +243,5 @@ if __name__ == "__main__":
     if "--zip" in sys.argv:
         # для релиза нужен именно zip: он открывается в Windows сам по себе
         make_zip(prefer_zip="--release" in sys.argv)
+    if "--sfx" in sys.argv:
+        make_sfx()
