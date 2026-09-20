@@ -1456,8 +1456,13 @@ def accent_file_text(text: str, acc: Accentizer, progress=None, cancel=None,
     (заголовки "# ", разделители "***", пустые строки -- строка в строку, это
     нужно для привязки ручных правок).
 
-    edits: {sha1(строка исходника): готовая строка} -- такие строки берутся
-    как есть, автомат их не трогает. Возвращает (текст, сколько правок легло)."""
+    edits: {sha1(строка исходника): {"fixed": строка человека, "base":
+    автоматическая строка на тот момент}}. Строка человека НЕ подменяет
+    результат целиком: автомат размечает её заново, а затем поверх ложатся
+    только те слова, которые человек действительно менял (merge_edit) --
+    иначе правка замораживает строку и поздние правила до неё не доходят.
+    Старый формат (просто строка) накладывается целиком, как раньше.
+    Возвращает (текст, сколько правок легло)."""
     edits = edits or {}
     if acc is not None and acc.acc is not None:
         if acc.set_source_policy(text):
@@ -1467,16 +1472,20 @@ def accent_file_text(text: str, acc: Accentizer, progress=None, cancel=None,
     out = list(lines)
     kept = 0
     jobs = []          # (номер строки, текст для модели, отступ заголовка)
+    by_hand = {}       # строки с ручной правкой: {номер: (строка, база)}
 
     for i, raw in enumerate(lines):
         s = raw.strip()
         if not s or s in BREAK_MARKERS:
             continue
-        fixed = edits.get(line_key(s))
-        if fixed is not None:
-            out[i] = fixed                 # ручная правка: автомат не трогает
+        hand = edits.get(line_key(s))
+        if hand is not None:
+            fixed, base = edit_parts(hand)
             kept += 1
-            continue
+            if base is None:
+                out[i] = fixed             # старый формат: снимок целиком
+                continue
+            by_hand[i] = (fixed, base)     # свежую разметку получит ниже
         if s.startswith("#"):
             head = s.lstrip("#")
             jobs.append((i, head.strip(), s[:len(s) - len(head)] + " "))
@@ -1488,7 +1497,11 @@ def accent_file_text(text: str, acc: Accentizer, progress=None, cancel=None,
 
     def work(job):
         i, body, pad = job
-        return i, pad + acc.process(body)
+        value = pad + acc.process(body)
+        if i in by_hand:
+            fixed, base = by_hand[i]
+            value = merge_edit(value, fixed, base)
+        return i, value
 
     # Абзацы независимы, а RUAccent на них потокобезопасен (проверено: тот же
     # результат, ускорение 3.9x на восьми потоках) -- первая расстановка по
@@ -1594,6 +1607,37 @@ def line_key(src_line: str) -> str:
     return hashlib.sha1(src_line.strip().encode("utf-8")).hexdigest()
 
 
+def edit_parts(value) -> tuple[str, str | None]:
+    """Правка: (строка человека, автоматическая строка на момент правки).
+
+    Старый формат -- просто строка, без второй половины: такие правки
+    накладываются целиком, как раньше."""
+    if isinstance(value, dict):
+        return value.get("fixed", ""), value.get("base")
+    return value, None
+
+
+def merge_edit(fresh: str, fixed: str, base: str | None) -> str:
+    """Наложить ручную правку на СВЕЖУЮ разметку, а не подменять её снимком.
+
+    Правка хранится снимком всей строки, и это ловушка: строка замирает на
+    том дне, когда её правили, и поздние правила до неё не доходят. Так
+    правка «к+озлы» заодно заморозила «П+отом» -- омограф в начале
+    предложения чинился позже (на слух 2026-09-20, Денис услышал «по́том»
+    в уже исправленной книге).
+
+    Зная автоматическую версию на момент правки, можно разобрать снимок
+    пословно: где человек изменил слово -- берём его, остальное берём из
+    свежей разметки. Если базы нет (правка старого формата) или строки
+    разошлись по числу слов, накладываем снимок целиком, как раньше."""
+    if base is None:
+        return fixed
+    f, b, x = fresh.split(" "), base.split(" "), fixed.split(" ")
+    if not (len(f) == len(b) == len(x)):
+        return fixed
+    return " ".join(xw if xw != bw else fw for fw, bw, xw in zip(f, b, x))
+
+
 CHECK_HEADER = """\
 # Спорные места: {name}
 #
@@ -1666,7 +1710,10 @@ def collect_edits(src_text: str, old_acc: str, new_acc: str, edits: dict) -> tup
     n = 0
     for s, o, w in zip(src, old, new):
         if o != w and s.strip():
-            edits[line_key(s)] = w
+            # рядом со строкой человека храним автоматическую версию на этот
+            # момент: по ней потом видно, какие именно слова он изменил, и
+            # правка переживает появление новых правил (см. merge_edit)
+            edits[line_key(s)] = {"fixed": w, "base": o}
             n += 1
     return edits, n
 
