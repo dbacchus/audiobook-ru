@@ -1,0 +1,26 @@
+# сборка
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+
+# то, что приложение создаёт само
+settings.json
+dictionary.json
+accents_cache.json
+yo_homographs.json
+app.log
+selftest.log
+audio/
+audio_test/
+models/
+ffmpeg/
+ffmpeg.exe
+
+# тексты и результаты работы
+*.acc.txt
+*.acc.txt.edits.json
+*.check.txt
+*.mp3
+*.wav

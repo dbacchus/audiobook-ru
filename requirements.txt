@@ -1,0 +1,16 @@
+# Установка (Windows, Python 3.10 и новее):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+#
+# torch ставится отдельной командой: с обычного PyPI приедет сборка с CUDA
+# на несколько гигабайт, а приложению нужна только версия для процессора.
+
+torch>=2.0            # см. примечание выше про --index-url
+numpy>=1.24
+omegaconf>=2.3        # нужен загрузчику моделей Silero
+ruaccent>=1.5.8       # ударения: омографы, е/ё, словарь
+onnxruntime>=1.16     # на нём работают модели RUAccent
+transformers>=4.30    # токенизаторы для них же
+
+# Для сборки автономного exe (необязательно):
+# pyinstaller>=6.0
