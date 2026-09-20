@@ -167,10 +167,11 @@ def copy_extras():
         src = os.path.join(APP_DIR, name)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(DIST, name))
-    src = os.path.join(APP_DIR, "dictionaries")
-    dst = os.path.join(DIST, "dictionaries")
-    if os.path.isdir(src) and not os.path.isdir(dst):
-        shutil.copytree(src, dst)
+    for sub in ("dictionaries", "data"):     # data -- словарь произношений CMUdict
+        src = os.path.join(APP_DIR, sub)
+        dst = os.path.join(DIST, sub)
+        if os.path.isdir(src) and not os.path.isdir(dst):
+            shutil.copytree(src, dst)
 
 
 def make_sfx():

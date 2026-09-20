@@ -357,6 +357,7 @@ class App(tk.Tk):
             "Модель v5_cis_base — MIT; русские модели Silero (v5_5_ru и др.) —",
             "CC BY-NC, только некоммерческое использование.",
             "RUAccent — Apache 2.0, PyTorch — BSD, ONNX Runtime — MIT,",
+            "словарь произношений CMUdict (Carnegie Mellon) — BSD,",
             "ffmpeg — LGPL-сборка, скачивается отдельно.",
             "",
             "— — —",

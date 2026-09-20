@@ -495,10 +495,56 @@ GENDER = {"часть": "f", "глава": "f", "книга": "f", "интерл
           "эпизод": "m", "день": "m", "год": "m",
           "действие": "n", "письмо": "n", "приложение": "n"}
 
+# Латиницу приходится записывать русскими буквами, иначе модель её выбросит.
+# Побуквенный транслит даёт «м+аркдовн» и «скреенсх+от», поэтому три уровня:
+# знакомые слова из словаря, аббревиатуры по названиям букв, остальное --
+# по правилам чтения (буквосочетания важнее отдельных букв).
+
+LATIN_WORDS = {
+    # то, что чаще всего встречается в текстах про эту самую программу
+    "windows": "в+индоус", "python": "п+итон", "silero": "сил+еро",
+    "github": "гитх+аб", "git": "гит", "markdown": "маркд+аун",
+    "readme": "р+идми", "ffmpeg": "эф эф эм п+эг", "torch": "торч",
+    "pytorch": "пайт+орч", "onnx": "+оникс", "runtime": "р+антайм",
+    "transformers": "трансф+ормерс", "release": "рил+из", "releases": "рил+изес",
+    "download": "даунл+оуд", "setup": "с+етап", "zip": "зип", "exe": "экз+е",
+    "chrome": "хром", "intel": "инт+ел", "email": "им+ейл", "mail": "мейл",
+    "online": "онл+айн", "offline": "офл+айн", "software": "с+офтвер",
+    "hardware": "х+ардвер", "internet": "интерн+ет", "web": "веб",
+    "site": "сайт", "server": "с+ервер", "cloud": "кл+ауд", "file": "файл",
+    "code": "коуд", "open": "+оупен", "source": "сорс", "license": "л+айсенс",
+    "apache": "ап+ач", "linux": "л+инукс", "microsoft": "м+айкрософт",
+    "google": "гугл", "apple": "+эпл", "anthropic": "антр+опик",
+    "claude": "клод", "wi": "вай", "fi": "фай", "com": "ком", "org": "орг",
+    "net": "нет", "ru": "ру", "txt": "т+экст", "png": "п+энг", "mp": "эм п+э",
+    "wav": "вав", "json": "джейс+он", "html": "эйч ти эм +эль",
+    "ruaccent": "ру акц+ент", "notes": "н+оутс", "audiobook": "+аудиокн+ига",
+    "requirements": "реквайрментс", "build": "билд", "app": "+апп",
+    "assets": "+ассетс", "docs": "докс", "install": "инст+олл",
+    "pip": "пип", "cpu": "си пи ю", "gpu": "джи пи ю", "ram": "р+ам",
+    "with": "виз", "py": "пай", "md": "эм ди", "sha": "ш+а", "url": "ю ар эль",
+    "http": "эйч ти ти пи", "https": "эйч ти ти пи +эс",
+}
+# названия латинских букв, как их читают в аббревиатурах
+LATIN_LETTERS = {"a": "эй", "b": "би", "c": "си", "d": "ди", "e": "и",
+                 "f": "эф", "g": "джи", "h": "эйч", "i": "ай", "j": "джей",
+                 "k": "кей", "l": "эль", "m": "эм", "n": "эн", "o": "оу",
+                 "p": "пи", "q": "кью", "r": "ар", "s": "эс", "t": "ти",
+                 "u": "ю", "v": "ви", "w": "д+аблъю", "x": "экс", "y": "уай",
+                 "z": "зед"}
+# буквосочетания читаются раньше отдельных букв
+LATIN_DIGRAPHS = [
+    ("sch", "ш"), ("tch", "ч"), ("igh", "ай"), ("tion", "шн"),
+    ("ch", "ч"), ("sh", "ш"), ("th", "т"), ("ph", "ф"), ("wh", "в"),
+    ("ck", "к"), ("qu", "кв"), ("ng", "нг"), ("ee", "и"), ("oo", "у"),
+    ("ou", "ау"), ("ow", "ау"), ("ea", "и"), ("ai", "эй"), ("ay", "эй"),
+    ("ey", "эй"), ("oa", "оу"), ("oi", "ой"), ("oy", "ой"), ("au", "о"),
+    ("aw", "о"), ("ew", "ю"), ("ie", "и"),
+]
 LAT2CYR = {"a": "а", "b": "б", "c": "к", "d": "д", "e": "е", "f": "ф", "g": "г",
            "h": "х", "i": "и", "j": "дж", "k": "к", "l": "л", "m": "м", "n": "н",
-           "o": "о", "p": "п", "q": "к", "r": "р", "s": "с", "t": "т", "u": "у",
-           "v": "в", "w": "в", "x": "кс", "y": "й", "z": "з"}
+           "o": "о", "p": "п", "q": "к", "r": "р", "s": "с", "t": "т", "u": "а",
+           "v": "в", "w": "у", "x": "кс", "y": "и", "z": "з"}
 
 
 def _roman_value(s: str) -> int:
@@ -522,7 +568,11 @@ def _gender_of(word: str) -> str:
 
 
 def expand_roman(text: str) -> str:
-    """«Интерлюдия I» -> «Интерлюдия первая» (род по предыдущему слову)."""
+    """«Интерлюдия I» -> «Интерлюдия первая» (род по предыдущему слову).
+
+    Однобуквенные цифры (I, V, X, C) разворачиваем только после слов вроде
+    «глава» или «часть»: иначе английское «I will be back» превращается
+    в «первая will be back», а «C» — в «сотый»."""
     def repl(m):
         s = m.group(0)
         if not s:
@@ -532,21 +582,126 @@ def expand_roman(text: str) -> str:
             return s
         before = text[:m.start()].rstrip()
         prev = (re.findall(r"[А-Яа-яЁё]+", before) or [""])[-1]
+        if len(s) == 1 and prev.lower() not in GENDER:
+            return s
         word = ORDINALS[_gender_of(prev)][n - 1]
         return word.capitalize() if s.isupper() and not prev else word
     return ROMAN_RE.sub(repl, text)
 
 
+LATIN_LONG = {"a": "эй", "e": "и", "i": "ай", "o": "оу", "u": "ю"}
+_CONS = "bcdfghjklmnpqrstvwxz"
+
+# Английские слова читаем по их настоящему произношению, а не по буквам: в
+# CMUdict (Carnegie Mellon, лицензия BSD, файл data/cmudict.dict.gz) записаны
+# фонемы и ударение для 126 тысяч слов. Отсюда «у+индоуз», а не «виндовс»,
+# и ударение в нужном месте. Английскую модель Silero взять нельзя: она под
+# CC BY-NC, да и голос посреди русской фразы менялся бы на чужой.
+ARPA_VOWELS = {
+    "AA": ("а", "о"), "AE": ("э", "э"), "AH": ("а", "а"), "AO": ("о", "о"),
+    "AW": ("ау", "ау"), "AY": ("ай", "ай"), "EH": ("э", "э"), "ER": ("эр", "эр"),
+    "EY": ("эй", "эй"), "IH": ("и", "и"), "IY": ("и", "и"), "OW": ("оу", "оу"),
+    "OY": ("ой", "ой"), "UH": ("у", "у"), "UW": ("у", "у"),
+}
+ARPA_CONS = {
+    "B": "б", "CH": "ч", "D": "д", "DH": "з", "F": "ф", "G": "г", "HH": "х",
+    "JH": "дж", "K": "к", "L": "л", "M": "м", "N": "н", "NG": "нг", "P": "п",
+    "R": "р", "S": "с", "SH": "ш", "T": "т", "TH": "т", "V": "в", "W": "у",
+    "Y": "й", "Z": "з", "ZH": "ж",
+}
+_CMUDICT = None
+
+
+def load_cmudict() -> dict:
+    """Словарь произношений: слово -> фонемы. Читается один раз и лениво."""
+    global _CMUDICT
+    if _CMUDICT is not None:
+        return _CMUDICT
+    _CMUDICT = {}
+    for place in (os.path.join(app_root(), "data", "cmudict.dict.gz"),
+                  os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "data", "cmudict.dict.gz")):
+        if not os.path.exists(place):
+            continue
+        try:
+            import gzip
+            with gzip.open(place, "rt", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if not line or line[0] in "#;":
+                        continue
+                    word, _, rest = line.partition(" ")
+                    if not rest:
+                        continue
+                    word = word.split("(")[0]          # «read(2)» -- второй вариант
+                    if word not in _CMUDICT:
+                        _CMUDICT[word] = rest.split()
+            break
+        except Exception:
+            pass
+    return _CMUDICT
+
+
+def arpabet_to_russian(phones) -> str:
+    """Фонемы -> русская запись со знаком ударения."""
+    out = []
+    bases = [p[:-1] if p[-1:].isdigit() else p for p in phones]
+    for i, ph in enumerate(phones):
+        stress = ph[-1] if ph[-1:].isdigit() else ""
+        base = bases[i]
+        nxt = bases[i + 1] if i + 1 < len(bases) else ""
+        prev = bases[i - 1] if i else ""
+        if base in ARPA_VOWELS:
+            strong, weak = ARPA_VOWELS[base]
+            sound = strong if stress == "1" else weak
+            out.append(("+" if stress == "1" else "") + sound)
+        elif base == "NG" and nxt in ("G", "K"):
+            out.append("н")               # «language»: не «лэнггуадж»
+        elif base == "Y" and prev in ARPA_CONS and nxt in ARPA_VOWELS:
+            out.append("ь")               # «beautiful»: «бьютифул», не «бйутифул»
+        else:
+            out.append(ARPA_CONS.get(base, ""))
+    return "".join(out)
+
+
+def _read_latin_word(w: str) -> str:
+    """Одно латинское слово по-русски."""
+    low = w.lower()
+    if low in LATIN_WORDS:
+        return LATIN_WORDS[low]
+    # аббревиатура: всё заглавными или нет ни одной гласной («MIT», «GPL»)
+    if len(w) <= 5 and (w.isupper() or not set(low) & set("aeiouy")):
+        return " ".join(LATIN_LETTERS.get(c, c) for c in low)
+    phones = load_cmudict().get(low)
+    if phones:
+        said = arpabet_to_russian(phones)
+        if said:
+            return said
+    # немая «e» на конце: «example» -> «ексампл», а в коротком слове она ещё и
+    # удлиняет предыдущую гласную («base» -> «бейс», «note» -> «ноут»)
+    if (len(low) > 3 and low.endswith("e") and low[-2] in _CONS
+            and sum(c in "aeiouy" for c in low) >= 2):
+        stem = low[:-1]
+        m = re.search(r"([aeiou])([" + _CONS + r"])$", stem)
+        if m and len(stem) <= 5:
+            stem = stem[:m.start(1)] + LATIN_LONG[m.group(1)] + m.group(2)
+        low = stem
+    out = low.replace("ui", "и")
+    out = re.sub(r"c(?=[eiy])", "s", out)        # «cis» -> «сис», «code» -> «коуд»
+    for pair, rep in LATIN_DIGRAPHS:
+        out = out.replace(pair, rep)
+    return "".join(LAT2CYR.get(c, c) for c in out)
+
+
 def latin_to_cyrillic(text: str) -> str:
-    """Оставшуюся латиницу переводим в кириллицу побуквенно: криво, но
-    произносимо и, главное, не роняет разбор SSML."""
+    """Латиница русскими буквами: по словарю, по названиям букв или по
+    правилам чтения. Точки внутри адресов произносим словом, иначе
+    «github.com» слипается в одно непроизносимое слово."""
     def repl(m):
-        out = []
-        for ch in m.group(0):
-            low = LAT2CYR.get(ch.lower(), "")
-            out.append(low.upper() if ch.isupper() else low)
-        return "".join(out)
-    return re.sub(r"[A-Za-z]+", repl, text)
+        word = m.group(0)
+        parts = word.split(".")
+        said = [_read_latin_word(p) if p else "" for p in parts]
+        return " т+очка ".join(s for s in said if s)
+    return re.sub(r"[A-Za-z][A-Za-z.]*[A-Za-z]|[A-Za-z]", repl, text)
 
 
 def normalize_latin(text: str):
@@ -554,8 +709,14 @@ def normalize_latin(text: str):
     found = re.findall(r"[A-Za-z]+", text)
     if not found:
         return text, []
-    out = latin_to_cyrillic(expand_roman(text))
-    return out, found
+    out = expand_roman(text)
+    # «v5_cis_base» -- это не слово, а три куска и число: подчёркивания и
+    # стыки букв с цифрами разводим пробелами, иначе всё слипается в
+    # «ви5кисбэйс», да и число потом не развернётся в слово
+    out = re.sub(r"(?<=[A-Za-z0-9])[_/](?=[A-Za-z0-9])", " ", out)
+    out = re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", out)
+    out = re.sub(r"(?<=\d)\.(?=\d)", " т+очка ", out)     # «3.10» -> «три точка десять»
+    return latin_to_cyrillic(out), found
 
 
 # ---------------------------------------------------------------- числа
