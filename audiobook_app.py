@@ -323,15 +323,17 @@ class VoiceDialog(tk.Toplevel):
             ttk.Radiobutton(sf, text=txt, value=val,
                             variable=self.sex).pack(side="left", padx=4)
 
-        # Детских голосов в наборе нет, но женский, поднятый вместе с
-        # формантами, читается как детский (на слух 2026-09-21: 1.28).
+        # Детских голосов в наборе нет. Женский, поднятый вместе с
+        # формантами, даёт подобие детского -- мультяшное, но для роли
+        # в одну-две реплики лучше, чем явно взрослая женщина.
         kf = ttk.Frame(self)
         kf.grid(row=3, column=0, padx=16, pady=(6, 0), sticky="w")
         ttk.Label(kf, text="Выше, ×").pack(side="left")
         self.shift = tk.DoubleVar(value=shift or 1.0)
         ttk.Spinbox(kf, from_=1.0, to=1.6, increment=0.02, width=6,
                     textvariable=self.shift).pack(side="left", padx=4)
-        ttk.Label(kf, text="1.0 — как есть; 1.28 — детский голос",
+        ttk.Label(kf, text="1.0 — как есть; 1.28 — подобие детского, "
+                            "мультяшное: годится для эпизодической роли",
                   style="Hint.TLabel").pack(side="left", padx=6)
 
         btns = ttk.Frame(self)
