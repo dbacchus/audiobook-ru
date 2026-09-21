@@ -24,7 +24,7 @@ import time
 import traceback
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 _CODE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _CODE_DIR)
@@ -256,6 +256,97 @@ class StressDialog(tk.Toplevel):
 
     def _ok(self):
         self.result = (self.var.get(), self.scope.get())
+        self.destroy()
+
+
+class VoiceDialog(tk.Toplevel):
+    """Каким голосом говорит персонаж. Список голосов и проба."""
+
+    def __init__(self, parent, name: str, titles: dict, current: str = "",
+                 sex: str = ""):
+        super().__init__(parent)
+        self.title(f"Голос: {name}")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.result = None
+        self.parent = parent
+        self._by_title = {v: k for k, v in titles.items()}
+
+        ttk.Label(self, text=name, font=("Segoe UI", 13, "bold")
+                  ).grid(row=0, column=0, padx=16, pady=(14, 2), sticky="w")
+        self.box = ttk.Combobox(self, width=34, state="readonly",
+                                values=list(titles.values()))
+        if current in titles:
+            self.box.set(titles[current])
+        self.box.grid(row=1, column=0, padx=16, pady=6, sticky="we")
+
+        # Род нужен не для голоса, а для разбора: «— сказала она» без имени
+        # укажет на говорящего, если в сцене женщина одна.
+        sf = ttk.Frame(self)
+        sf.grid(row=2, column=0, padx=16, sticky="w")
+        ttk.Label(sf, text="Род (для «сказал / сказала»):").pack(side="left")
+        self.sex = tk.StringVar(value=sex or "")
+        for txt, val in (("м", "м"), ("ж", "ж"), ("не знаю", "")):
+            ttk.Radiobutton(sf, text=txt, value=val,
+                            variable=self.sex).pack(side="left", padx=4)
+
+        btns = ttk.Frame(self)
+        btns.grid(row=3, column=0, padx=16, pady=12, sticky="e")
+        ttk.Button(btns, text="Применить", command=self._ok).pack(side="left", padx=4)
+        ttk.Button(btns, text="Прослушать",
+                   command=self._listen).pack(side="left", padx=4)
+        ttk.Button(btns, text="Отмена", command=self.destroy).pack(side="left")
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+        self.wait_visibility()
+        self.focus()
+
+    def _voice(self):
+        return self._by_title.get(self.box.get(), "")
+
+    def _listen(self):
+        v = self._voice()
+        if v:
+            self.parent.speak_text(core.SAMPLE_PHRASE, voice=v)
+
+    def _ok(self):
+        self.result = (self._voice(), self.sex.get())
+        self.destroy()
+
+
+class SpeakerDialog(tk.Toplevel):
+    """Кто произносит эту реплику."""
+
+    def __init__(self, parent, text: str, names: list, current: str = ""):
+        super().__init__(parent)
+        self.title("Кто говорит")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.result = None
+
+        ttk.Label(self, text=text[:300], wraplength=parent.px(520),
+                  style="Hint.TLabel").grid(row=0, column=0, padx=16,
+                                            pady=(14, 8), sticky="w")
+        self.box = ttk.Combobox(self, width=28, state="readonly",
+                                values=[""] + names)
+        self.box.set(current)
+        self.box.grid(row=1, column=0, padx=16, sticky="w")
+        ttk.Label(self, text="пусто — снять назначение, читает рассказчик",
+                  style="Hint.TLabel").grid(row=2, column=0, padx=16, sticky="w")
+
+        btns = ttk.Frame(self)
+        btns.grid(row=3, column=0, padx=16, pady=12, sticky="e")
+        ttk.Button(btns, text="Применить", command=self._ok).pack(side="left", padx=4)
+        ttk.Button(btns, text="Отмена", command=self.destroy).pack(side="left")
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+        self.wait_visibility()
+        self.box.focus()
+
+    def _ok(self):
+        self.result = self.box.get()
         self.destroy()
 
 
@@ -523,8 +614,10 @@ class App(tk.Tk):
         self.f_yo = tk.BooleanVar(value=True)
         self.f_hom = tk.BooleanVar(value=True)
         self.f_no = tk.BooleanVar(value=False)
+        self.f_spk = tk.BooleanVar(value=False)
         for text_, var in (("е / ё", self.f_yo), ("омографы", self.f_hom),
-                           ("без ударения", self.f_no)):
+                           ("без ударения", self.f_no),
+                           ("говорящие", self.f_spk)):
             ttk.Checkbutton(fl, text=text_, variable=var,
                             command=self.check_text).pack(side="left", padx=8)
         self.issue_count = tk.StringVar(value="")
@@ -625,6 +718,43 @@ class App(tk.Tk):
                         variable=self.useacc_var).pack(side="left", padx=12)
         ttk.Checkbutton(opts, text="делить по заголовкам «# Глава…»",
                         variable=self.split_var).pack(side="left")
+
+        r += 1
+        self.play_var = tk.BooleanVar(value=s.get("play_mode", False))
+        pl = ttk.Frame(grid)
+        pl.grid(row=r, column=0, columnspan=3, sticky="we", pady=(4, 0))
+        ttk.Checkbutton(pl, text="Аудиоспектакль: реплики персонажей — "
+                                 "разными голосами",
+                        variable=self.play_var, command=self._toggle_play
+                        ).pack(anchor="w")
+        # Слова автора внутри реплики всегда читает рассказчик, поэтому здесь
+        # настраиваются только персонажи; голос рассказчика -- тот, что выше.
+        self.roles_frame = ttk.Frame(grid)
+        self.roles_frame.grid(row=r + 1, column=0, columnspan=3,
+                              sticky="we", padx=(0, 6))
+        rf = self.roles_frame
+        ttk.Label(rf, text="Роли", style="Head.TLabel").pack(anchor="w")
+        ttk.Label(rf, text="двойной клик — выбрать голос; кто без голоса, "
+                           "того читает рассказчик",
+                  style="Hint.TLabel").pack(anchor="w")
+        self.roles_tree = ttk.Treeview(rf, columns=("who", "n", "sex", "voice"),
+                                       show="headings", height=7)
+        for col, txt, w in (("who", "Персонаж", 150), ("n", "Реплик", 70),
+                            ("sex", "Род", 50), ("voice", "Голос", 240)):
+            self.roles_tree.heading(col, text=txt)
+            self.roles_tree.column(col, width=self.px(w),
+                                   anchor="w" if col != "n" else "e")
+        self.roles_tree.pack(fill="x", pady=2)
+        self.roles_tree.bind("<Double-1>", self._role_pick)
+        rb = ttk.Frame(rf)
+        rb.pack(anchor="w", pady=2)
+        ttk.Button(rb, text="Найти персонажей в тексте",
+                   command=self._find_roles).pack(side="left")
+        ttk.Button(rb, text="Убрать голос",
+                   command=self._role_clear).pack(side="left", padx=6)
+        ttk.Button(rb, text="Добавить персонажа",
+                   command=self._role_add).pack(side="left")
+        self._toggle_play()
 
         r += 1
         ttk.Label(grid, text="Книга / автор").grid(row=r, column=0, sticky="w")
@@ -1045,8 +1175,12 @@ class App(tk.Tk):
                                 ("nostress", self.f_no)) if v.get()}
         self.issues.delete(*self.issues.get_children())
         self._issue_pos = {}
+        self._speaker_rows = {}
+        if self.f_spk.get():
+            self._list_speakers()
         if not kinds:
-            self.issue_count.set("")
+            if not self.f_spk.get():
+                self.issue_count.set("")
             return
         data = self.text.get("1.0", "end-1c")
         found = core.analyze(data, kinds)
@@ -1062,6 +1196,63 @@ class App(tk.Tk):
         self.issue_count.set(f"е/ё: {n['yo']}   омографов: {n['homograph']}   "
                              f"без ударения: {n['nostress']}"
                              + (f"   (показаны первые {limit})" if len(found) > limit else ""))
+
+    def _list_speakers(self):
+        """Реплики главы с говорящими -- в ту же таблицу проверки.
+
+        Абзацы берём через parse_text, тем же путём, что и озвучка: иначе
+        ключ строки не совпадёт и назначение не найдётся при синтезе."""
+        self._load_roles()
+        data = self.text.get("1.0", "end-1c")
+        sections = core.parse_text(data, split_chapters=False)
+        if not sections:                       # глава не открыта
+            self.issue_count.set("")
+            return
+        items = sections[0][1]
+        # для угадывания нужны ВСЕ персонажи книги, а не только те, кому уже
+        # выбран голос: иначе «— сказал Павел» не станет якорем
+        cast = set(self.roles.get("voices", {})) | set(self._characters())
+        got = core.guess_speakers(items, cast, self.roles.get("speakers"),
+                                  self.roles.get("genders"))
+        label = {"точно": "назван в тексте", "догадка": "по чередованию",
+                 "нет": "НЕ НАЗНАЧЕН"}
+        n = {"точно": 0, "догадка": 0, "нет": 0}
+        for i, ((_, text), res) in enumerate(zip(items, got)):
+            if res is None:
+                continue
+            who, how = res
+            n[how if who else "нет"] += 1
+            iid = f"s{i}"
+            self._speaker_rows[iid] = text
+            self.issues.insert("", "end", iid=iid,
+                               values=(who or "—", label[how if who else "нет"],
+                                       core.unstress(text)[:200]))
+        self.issue_count.set(f"реплик: назначено {n['точно']}, "
+                             f"догадка {n['догадка']}, "
+                             f"без говорящего {n['нет']}")
+
+    def _pick_speaker(self, iid):
+        text = self._speaker_rows[iid]
+        names = sorted(set(self.roles.get("voices", {}))
+                       | set(getattr(self, "_role_counts", {})))
+        if not names:
+            messagebox.showinfo("Нет персонажей",
+                                "Вкладка «2. Озвучка» → «Найти персонажей "
+                                "в тексте».")
+            return
+        dlg = SpeakerDialog(self, core.unstress(text), names,
+                            self.roles["speakers"].get(core.line_key(
+                                core.unstress(text)), ""))
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+        key = core.line_key(core.unstress(text))
+        if dlg.result:
+            self.roles["speakers"][key] = dlg.result
+        else:
+            self.roles["speakers"].pop(key, None)
+        self._save_roles()
+        self.check_text()
 
     def _select_issue(self, iid):
         line, col, word = self._issue_pos[iid]
@@ -1079,7 +1270,12 @@ class App(tk.Tk):
 
     def _edit_issue(self, event=None):
         sel = self.issues.selection()
-        if not sel or sel[0] not in self._issue_pos:
+        if not sel:
+            return
+        if sel[0] in getattr(self, "_speaker_rows", {}):
+            self._pick_speaker(sel[0])
+            return
+        if sel[0] not in self._issue_pos:
             return
         a, b, word = self._select_issue(sel[0])
         self._change_word(word, a, b, self.issues.item(sel[0], "values")[2])
@@ -1154,12 +1350,15 @@ class App(tk.Tk):
         self.text.configure(font=("Segoe UI", self.font_size))
         self.settings["font_size"] = self.font_size
 
-    def speak_text(self, text):
-        """Прослушать одно слово или фразу (кнопка в диалоге ударения)."""
+    def speak_text(self, text, voice: str = ""):
+        """Прослушать одно слово или фразу (кнопка в диалогах).
+
+        voice -- чтобы послушать не текущий голос, а голос персонажа."""
         text = (text or "").strip()
         if not text:
             return
-        speaker, ssml, rate = self.voice_var.get(), self.ssml_var.get(), self._rate()
+        speaker = voice or self.voice_var.get()
+        ssml, rate = self.ssml_var.get(), self._rate()
         model, threads = self.model_var.get(), self.threads_var.get()
 
         def job(ctx):
@@ -1169,6 +1368,128 @@ class App(tk.Tk):
             return self._tmp_wav
 
         self.worker.start(job, on_done=self._play, name="проба")
+
+    # -- роли аудиоспектакля -------------------------------------------
+    def _all_files(self):
+        return list(self.files)
+
+    def _voices_path(self):
+        """К чему привязаны роли: путь ГЛАВЫ, а не самого файла ролей.
+
+        load_voices и save_voices дописывают «.voices.json» сами; передашь
+        им готовый путь -- суффикс приклеится дважды, и файл заживёт своей
+        жизнью под именем «…voices.json.voices.json» (так и было).
+
+        Роли общие для всех глав, поэтому берём первую главу списка."""
+        files = self._all_files()
+        return self._acc_path(files[0]) if files else None
+
+    def _load_roles(self):
+        p = self._voices_path()
+        self.roles = core.load_voices(p) if p else {"narrator": "", "voices": {},
+                                                    "speakers": {}, "genders": {}}
+        return self.roles
+
+    def _save_roles(self):
+        p = self._voices_path()
+        if p:
+            core.save_voices(p, self.roles)
+
+    def _toggle_play(self):
+        """Список ролей виден только в режиме спектакля."""
+        if self.play_var.get():
+            self.roles_frame.grid()
+            if not getattr(self, "roles", None):
+                self._load_roles()
+            self._refresh_roles()
+        else:
+            self.roles_frame.grid_remove()
+
+    def _characters(self):
+        """Все персонажи книги: найденные в тексте плюс добавленные руками."""
+        return dict(getattr(self, "_role_counts", {}))
+
+    def _role_add(self):
+        """Имя, которое не нашлось само.
+
+        Признак «пишется с большой буквы в середине фразы» промахивается,
+        если персонажа называют только в начале предложения."""
+        name = simpledialog.askstring("Добавить персонажа",
+                                      "Имя, как оно стоит в словах автора:",
+                                      parent=self)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        self._role_counts = dict(getattr(self, "_role_counts", {}))
+        self._role_counts.setdefault(name, 0)
+        self.roles.setdefault("voices", {}).setdefault(name, "")
+        self._save_roles()
+        self._refresh_roles()
+
+    def _refresh_roles(self):
+        self.roles_tree.delete(*self.roles_tree.get_children())
+        counts = getattr(self, "_role_counts", {})
+        voices = self.roles.get("voices", {})
+        names = sorted(set(counts) | set(voices),
+                       key=lambda n: (-counts.get(n, 0), n))
+        titles = core.voices_for(self.model_var.get())
+        sex = self.roles.get("genders", {})
+        for n in names:
+            self.roles_tree.insert("", "end", iid=n, values=(
+                n, counts.get(n, ""), sex.get(n, ""),
+                titles.get(voices.get(n, ""), "")))
+
+    def _find_roles(self):
+        """Персонажи из слов автора по всем главам."""
+        counts = {}
+        for p in self._all_files():
+            src = self._acc_path(p) if os.path.exists(self._acc_path(p)) else p
+            try:
+                with open(src, encoding="utf-8") as f:
+                    lines = [l.strip() for l in f if l.strip()]
+            except OSError:
+                continue
+            for name, n in core.detect_characters(lines).items():
+                counts[name] = counts.get(name, 0) + n
+            self._src_lines = lines
+        self._role_counts = counts
+        self._load_roles()
+        # род -- по форме глагола («сказала Аня»), сам текст его и подсказывает
+        found = core.detect_genders(getattr(self, "_src_lines", []), counts)
+        self.roles.setdefault("genders", {})
+        for name, g in found.items():
+            self.roles["genders"].setdefault(name, g)
+        self._save_roles()
+        self._refresh_roles()
+        self.log(f"Персонажей найдено: {len(counts)}"
+                 + (f" — {', '.join(list(counts)[:8])}" if counts else ""))
+
+    def _role_pick(self, _event=None):
+        sel = self.roles_tree.selection()
+        if not sel:
+            return
+        name = sel[0]
+        titles = core.voices_for(self.model_var.get())
+        cur = self.roles["voices"].get(name, "")
+        sex = self.roles.get("genders", {}).get(name, "")
+        dlg = VoiceDialog(self, name, titles, cur, sex)
+        self.wait_window(dlg)
+        if dlg.result is not None:
+            voice, sex = dlg.result
+            self.roles["voices"][name] = voice
+            self.roles.setdefault("genders", {})
+            if sex:
+                self.roles["genders"][name] = sex
+            else:
+                self.roles["genders"].pop(name, None)
+            self._save_roles()
+            self._refresh_roles()
+
+    def _role_clear(self):
+        for name in self.roles_tree.selection():
+            self.roles["voices"].pop(name, None)
+        self._save_roles()
+        self._refresh_roles()
 
     # -- словарь -------------------------------------------------------
     def _refresh_dict(self):
@@ -1426,6 +1747,15 @@ class App(tk.Tk):
         use_acc = self.useacc_var.get()
         split = self.split_var.get()
         model, threads = self.model_var.get(), self.threads_var.get()
+        play_on = self.play_var.get()
+        roles = dict(self._load_roles()) if play_on else None
+        if play_on and not roles.get("voices"):
+            messagebox.showinfo("Роли не назначены",
+                                "Режим аудиоспектакля включён, но ни одному "
+                                "персонажу не выбран голос.\n\nВкладка "
+                                "«2. Озвучка» → «Найти персонажей в тексте», "
+                                "затем двойной клик по персонажу.")
+            return
         if self.synth is None:
             self.set_indeterminate("Загружаю голосовую модель…")
             self.show_overlay("Загружаю голосовую модель\n\n"
@@ -1467,10 +1797,22 @@ class App(tk.Tk):
                     ctx.status(f"озвучка: {title} ({n}/{len(files)})")
                     if len(sections) > 1:
                         ctx.log(f"  {track:02d} читаю: {title}")
+                    play = None
+                    if roles is not None:
+                        # говорящих считаем заново по текущим правилам, а
+                        # назначения человека берём из файла -- так поздние
+                        # улучшения догадки доходят до неназначенных реплик
+                        texts = [t for _, t in items]
+                        got = core.guess_speakers(texts, roles["voices"],
+                                                  roles.get("speakers"),
+                                                  roles.get("genders"))
+                        play = {"narrator": speaker,
+                                "voices": roles["voices"],
+                                "speakers": [g[0] if g else None for g in got]}
                     pcm = core.render_section(
                         synth, items, speaker, opts,
                         progress=lambda c, t, lbl: ctx.progress(c, t, lbl),
-                        cancel=ctx.cancel)
+                        cancel=ctx.cancel, play=play)
                     if ctx.cancelled:
                         break
                     name = safe_name(title) if len(sections) > 1 else stem
@@ -1524,6 +1866,7 @@ class App(tk.Tk):
                  pause_break=self.p_brk.get(), ssml=self.ssml_var.get(),
                  loudnorm=self.loud_var.get(), merge=self.merge_var.get(),
                  use_acc=self.useacc_var.get(), split_chapters=self.split_var.get(),
+                 play_mode=self.play_var.get(),
                  album=self.album_var.get(), artist=self.artist_var.get(),
                  out_dir=self.out_var.get(), font_size=self.font_size)
         try:

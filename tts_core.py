@@ -2081,11 +2081,17 @@ DASHES = "—–"
 
 # Глаголы речи и действия, по которым узнаются слова автора. Список рабочий,
 # а не исчерпывающий: важно отличить их от продолжения реплики.
-SPEECH_VERB = (r"сказа\w*|говор\w*|спроси\w*|отвеча\w*|ответи\w*|произн\w*|"
-               r"повтори\w*|добави\w*|замети\w*|возрази\w*|отозва\w*|буркн\w*|"
-               r"крикн\w*|шепн\w*|шепта\w*|пробормота\w*|усмехн\w*|кивн\w*|"
-               r"продолжи\w*|переби\w*|поиска\w*|помолча\w*|вздохн\w*|"
-               r"посмотре\w*|подума\w*|засмея\w*|улыбн\w*|покача\w*|позва\w*")
+SPEECH_VERB = (
+    # собственно речь
+    r"сказа\w*|говор\w*|спроси\w*|отвеча\w*|ответи\w*|произн\w*|повтори\w*|"
+    r"добави\w*|замети\w*|возрази\w*|отозва\w*|буркн\w*|крикн\w*|шепн\w*|"
+    r"шепта\w*|пробормота\w*|переби\w*|продолжи\w*|позва\w*|окликн\w*|"
+    r"согласи\w*|подтверди\w*|призна\w*|поясни\w*|объясни\w*|уточни\w*|"
+    r"напомни\w*|предложи\w*|попроси\w*|вел\w*|приказа\w*|проворча\w*|"
+    r"протян\w*|выдохн\w*|начал\w*|закончи\w*|заключи\w*|переспроси\w*|"
+    # действие вместо речи: «— Нет, — покачал он головой»
+    r"усмехн\w*|кивн\w*|поиска\w*|помолча\w*|вздохн\w*|посмотре\w*|подума\w*|"
+    r"засмея\w*|улыбн\w*|покача\w*|хмыкн\w*|фыркн\w*|пожа\w*|рассмея\w*")
 _SPEECH_VERB_RE = re.compile(rf"\b(?:{SPEECH_VERB})\b", re.IGNORECASE)
 _SEG_SPLIT_RE = re.compile(rf"\s+[{DASHES}]\s+")
 _NAME_AFTER_VERB = re.compile(rf"(?:{SPEECH_VERB})\s+((?:[А-ЯЁ][а-яё]+\s*){{1,3}})")
@@ -2100,8 +2106,9 @@ def unstress(text: str) -> str:
     return text.replace("+", "")
 
 
-def is_dialogue(line: str) -> bool:
-    return line.lstrip().startswith(tuple(DASHES))
+def is_dialogue(line) -> bool:
+    # у разделителя сцен текста нет вовсе -- отсюда проверка на пустоту
+    return bool(line) and line.lstrip().startswith(tuple(DASHES))
 
 
 def split_reply(line: str) -> list:
@@ -2125,7 +2132,58 @@ def split_reply(line: str) -> list:
     return out
 
 
-def speaker_from_author(chunk: str, cast: dict) -> str | None:
+def verb_gender(chunk: str) -> str | None:
+    """Род говорящего по форме глагола: «сказал» -- м, «сказала» -- ж.
+
+    Глагол прошедшего времени согласован с подлежащим, то есть с самим
+    говорящим, и это готовая подсказка прямо в тексте -- никакого словаря
+    имён не нужно. Множественное число («сказали») пропускаем: там
+    говорящих несколько."""
+    m = re.search(rf"\b({SPEECH_VERB})\b", unstress(chunk), re.IGNORECASE)
+    if not m:
+        return None
+    v = m.group(0).lower()
+    if v.endswith("ли"):
+        return None
+    if v.endswith("ла") or v.endswith("лась"):
+        return "ж"
+    if v.endswith("л") or v.endswith("лся"):
+        return "м"
+    return None
+
+
+def detect_genders(lines: list, cast) -> dict:
+    """Род каждого персонажа -- по глаголам, которыми его вводит автор.
+
+    «— сказала Аня» встречается чаще, чем ошибается: берём преобладающий
+    род по всем упоминаниям."""
+    votes = {}
+    for line in lines:
+        if not is_dialogue(line):
+            continue
+        for kind, chunk in split_reply(line):
+            if kind != "author":
+                continue
+            who = speaker_from_author(chunk, cast)
+            g = verb_gender(chunk)
+            if who and g:
+                votes.setdefault(who, {"м": 0, "ж": 0})[g] += 1
+    return {who: ("ж" if v["ж"] > v["м"] else "м")
+            for who, v in votes.items() if v["м"] != v["ж"]}
+
+
+def _cast_forms(cast) -> dict:
+    """Роли в общем виде {имя: (как его называют в тексте, ...)}.
+
+    Принимаем и простой список имён, и словарь «имя -> голос»: в обоих
+    случаях имя ищется само по себе."""
+    if isinstance(cast, dict) and cast and isinstance(next(iter(cast.values())),
+                                                      (list, tuple, set)):
+        return cast
+    return {name: (name,) for name in cast}
+
+
+def speaker_from_author(chunk: str, cast) -> str | None:
     """Кто говорит, по словам автора: имя рядом с глаголом речи.
 
     Важно смотреть именно рядом с глаголом: в «— Тихон говорит, ты его
@@ -2133,14 +2191,58 @@ def speaker_from_author(chunk: str, cast: dict) -> str | None:
     text = unstress(chunk)
     m = _NAME_AFTER_VERB.search(text) or _NAME_BEFORE_VERB.search(text)
     hay = m.group(1) if m else text
-    for name in cast:
-        for form in cast[name]:
-            if re.search(rf"\b{re.escape(form)}[а-яё]*\b", hay):
-                return name
-    return None
+    # Берём имя, стоящее РАНЬШЕ прочих: «Матвей Ильич» -- это Матвей, а
+    # перебор в произвольном порядке (cast бывает множеством) давал то одно,
+    # то другое от запуска к запуску.
+    best = None
+    for name, forms in _cast_forms(cast).items():
+        for form in forms:
+            hit = re.search(rf"\b{re.escape(form)}[а-яё]*\b", hay)
+            if hit and (best is None or hit.start() < best[0]
+                        or (hit.start() == best[0] and len(form) > best[1])):
+                best = (hit.start(), len(form), name)
+    return best[2] if best else None
 
 
-def guess_speakers(lines: list, cast: dict, known: dict = None) -> list:
+def _scene_bounds(items: list) -> list:
+    """Границы сцен: заголовок и разделитель «***» диалог прерывают.
+
+    Это важно для чередования: оно считается ВНУТРИ сцены, а если взять
+    главу целиком, говорящих окажется больше двух и правило не сработает
+    вовсе."""
+    edges, start = [], 0
+    for i, it in enumerate(items):
+        kind = it[0] if isinstance(it, (tuple, list)) else None
+        if kind in ("brk", "title"):
+            if i > start:
+                edges.append((start, i))
+            start = i + 1
+    if start < len(items):
+        edges.append((start, len(items)))
+    return edges
+
+
+def guess_speakers(items: list, cast: dict, known: dict = None,
+                   genders: dict = None) -> list:
+    """Обёртка: режет на сцены и разбирает каждую отдельно.
+
+    items -- либо строки, либо пары (вид, текст), как их отдаёт parse_text;
+    во втором случае границы сцен берутся из видов. Род персонажей, если
+    не передан, выводится из текста сам."""
+    paired = bool(items) and isinstance(items[0], (tuple, list))
+    texts = [it[1] for it in items] if paired else list(items)
+    if genders is None:
+        genders = detect_genders(texts, cast)
+    out = [None] * len(texts)
+    for a, b in (_scene_bounds(items) if paired else [(0, len(texts))]):
+        for k, res in zip(range(a, b),
+                          _guess_scene(texts[a:b], cast, known, genders)):
+            out[k] = res
+    return out
+
+
+def _guess_scene(lines: list, cast: dict, known: dict = None,
+                 genders: dict = None) -> list:
     """Кто говорит в каждой реплике сцены.
 
     Возвращает список той же длины, что lines: None для повествования,
@@ -2174,6 +2276,26 @@ def guess_speakers(lines: list, cast: dict, known: dict = None) -> list:
         else:
             out[i] = (None, "нет")
 
+    # Второй источник якорей: род глагола. «— сказала она» не называет имени,
+    # но глагол согласован с говорящим, и если в сцене женщина одна, говорящий
+    # определён точно, а не догадкой. Так спасаются реплики с «он/она».
+    present = list(dict.fromkeys(anchors.values()))
+    if genders and len(present) > 1:
+        for i in idx:
+            if out[i][1] == "точно":
+                continue
+            for kind, chunk in split_reply(lines[i]):
+                if kind != "author":
+                    continue
+                g = verb_gender(chunk)
+                if not g:
+                    continue
+                fits = [n for n in present if genders.get(n) == g]
+                if len(fits) == 1:
+                    anchors[i] = fits[0]
+                    out[i] = (fits[0], "точно")
+                break
+
     voices = list(dict.fromkeys(anchors.values()))
     if len(voices) != 2 or not anchors:
         return out
@@ -2189,6 +2311,90 @@ def guess_speakers(lines: list, cast: dict, known: dict = None) -> list:
         who = anchors[near] if step % 2 == 0 else other[anchors[near]]
         out[i] = (who, "догадка")
     return out
+
+
+def proper_names(lines: list) -> set:
+    """Имена собственные книги -- по самой книге, без словарей и морфологии.
+
+    Признак простой и надёжный: имя собственное пишется с большой буквы
+    ВЕЗДЕ, а обычное слово -- только в начале предложения. Поэтому берём
+    слова, которые хоть раз встретились с большой буквы в СЕРЕДИНЕ фразы.
+
+    Отсеивать наоборот, списком «не-имён», бессмысленно: с большой буквы
+    в начале предложения бывает любое слово."""
+    found = set()
+    for line in lines:
+        text = unstress(line or "")
+        # начало предложения: после точки, восклицательного, вопросительного,
+        # многоточия, открывающей кавычки или тире прямой речи
+        for m in re.finditer(r"[А-ЯЁ][а-яё]{2,}", text):
+            before = text[:m.start()].rstrip()
+            if not before:
+                continue                      # первое слово строки
+            if before[-1] in ".!?…:«\"'([-—–":
+                continue                      # первое слово предложения
+            found.add(m.group(0))
+    return found
+
+
+def detect_characters(lines: list) -> dict:
+    """Кто говорит в книге: имена из слов автора, с числом реплик.
+
+    Берём имя рядом с глаголом речи -- «сказал Матвей Ильич», «Аня
+    ответила» -- и оставляем от него ПЕРВОЕ слово. Так отчество и фамилия
+    сливаются с именем сами: «Матвей Ильич» и «Матвей» -- один персонаж, а
+    не два, и «Елена Карловна» не порождает лишнюю «Карловну».
+
+    Именем считается только то, что книга сама показала как имя собственное
+    (см. proper_names): иначе «Она сказала» даёт персонажа «Она»."""
+    names = proper_names(lines)
+    found = {}
+    for line in lines:
+        if not is_dialogue(line):
+            continue
+        for kind, chunk in split_reply(line):
+            if kind != "author":
+                continue
+            text = unstress(chunk)
+            m = _NAME_AFTER_VERB.search(text) or _NAME_BEFORE_VERB.search(text)
+            if not m:
+                continue
+            words = [w for w in m.group(1).split()
+                     if len(w) > 2 and w[0].isupper() and w in names]
+            if words:
+                found[words[0]] = found.get(words[0], 0) + 1
+    return dict(sorted(found.items(), key=lambda kv: -kv[1]))
+
+
+def voices_path(acc_path: str) -> str:
+    return acc_path + ".voices.json"
+
+
+def load_voices(acc_path: str) -> dict:
+    """Роли и назначения: {narrator, voices: {имя: голос}, speakers:
+    {ключ строки: имя}}."""
+    p = voices_path(acc_path)
+    empty = {"narrator": "", "voices": {}, "speakers": {},
+             "genders": {}}
+    if not os.path.exists(p):
+        return empty
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        empty.update({k: data.get(k, v) for k, v in empty.items()})
+        return empty
+    except Exception:
+        return empty
+
+
+def save_voices(acc_path: str, data: dict):
+    p = voices_path(acc_path)
+    if not any(data.get(k) for k in ("voices", "speakers", "genders")):
+        if os.path.exists(p):
+            os.remove(p)
+        return
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
 
 
 def voice_plan(line: str, speaker: str | None, cast_voices: dict,
