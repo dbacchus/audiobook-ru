@@ -296,7 +296,7 @@ class VoiceDialog(tk.Toplevel):
     """Каким голосом говорит персонаж. Список голосов и проба."""
 
     def __init__(self, parent, name: str, titles: dict, current: str = "",
-                 sex: str = ""):
+                 sex: str = "", shift: float = 1.0):
         super().__init__(parent)
         self.title(f"Голос: {name}")
         self.resizable(False, False)
@@ -323,8 +323,19 @@ class VoiceDialog(tk.Toplevel):
             ttk.Radiobutton(sf, text=txt, value=val,
                             variable=self.sex).pack(side="left", padx=4)
 
+        # Детских голосов в наборе нет, но женский, поднятый вместе с
+        # формантами, читается как детский (на слух 2026-09-21: 1.28).
+        kf = ttk.Frame(self)
+        kf.grid(row=3, column=0, padx=16, pady=(6, 0), sticky="w")
+        ttk.Label(kf, text="Выше, ×").pack(side="left")
+        self.shift = tk.DoubleVar(value=shift or 1.0)
+        ttk.Spinbox(kf, from_=1.0, to=1.6, increment=0.02, width=6,
+                    textvariable=self.shift).pack(side="left", padx=4)
+        ttk.Label(kf, text="1.0 — как есть; 1.28 — детский голос",
+                  style="Hint.TLabel").pack(side="left", padx=6)
+
         btns = ttk.Frame(self)
-        btns.grid(row=3, column=0, padx=16, pady=12, sticky="e")
+        btns.grid(row=4, column=0, padx=16, pady=12, sticky="e")
         ttk.Button(btns, text="Применить", command=self._ok).pack(side="left", padx=4)
         ttk.Button(btns, text="Прослушать",
                    command=self._listen).pack(side="left", padx=4)
@@ -341,10 +352,11 @@ class VoiceDialog(tk.Toplevel):
     def _listen(self):
         v = self._voice()
         if v:
-            self.parent.speak_text(core.SAMPLE_PHRASE, voice=v)
+            self.parent.speak_text(core.SAMPLE_PHRASE, voice=v,
+                                   shift=self.shift.get())
 
     def _ok(self):
-        self.result = (self._voice(), self.sex.get())
+        self.result = (self._voice(), self.sex.get(), self.shift.get())
         self.destroy()
 
 
@@ -772,10 +784,12 @@ class App(tk.Tk):
         ttk.Label(rf, text="кто остался без голоса, того читает рассказчик — "
                            "для эпизодических это нормально",
                   style="Hint.TLabel").pack(anchor="w")
-        self.roles_tree = ttk.Treeview(rf, columns=("who", "n", "sex", "voice"),
+        self.roles_tree = ttk.Treeview(rf,
+                                       columns=("who", "n", "sex", "voice", "k"),
                                        show="headings", height=7)
         for col, txt, w in (("who", "Персонаж", 150), ("n", "Реплик", 70),
-                            ("sex", "Род", 50), ("voice", "Голос", 240)):
+                            ("sex", "Род", 50), ("voice", "Голос", 220),
+                            ("k", "Выше", 60)):
             self.roles_tree.heading(col, text=txt)
             self.roles_tree.column(col, width=self.px(w),
                                    anchor="w" if col != "n" else "e")
@@ -1398,7 +1412,7 @@ class App(tk.Tk):
         self.text.configure(font=("Segoe UI", self.font_size))
         self.settings["font_size"] = self.font_size
 
-    def speak_text(self, text, voice: str = ""):
+    def speak_text(self, text, voice: str = "", shift: float = 1.0):
         """Прослушать одно слово или фразу (кнопка в диалогах).
 
         voice -- чтобы послушать не текущий голос, а голос персонажа."""
@@ -1412,6 +1426,8 @@ class App(tk.Tk):
         def job(ctx):
             synth = self._get_synth(ctx, model, threads)
             pcm = synth.say(text, speaker, "par", ssml, rate)
+            if shift and abs(shift - 1.0) > 0.01:
+                pcm = core.shift_voice(pcm, shift)
             core.write_wav(self._tmp_wav, pcm)
             return self._tmp_wav
 
@@ -1509,9 +1525,11 @@ class App(tk.Tk):
         titles = core.voices_for(self.model_var.get())
         sex = self.roles.get("genders", {})
         for n in names:
+            k = self.roles.get("shifts", {}).get(n)
             self.roles_tree.insert("", "end", iid=n, values=(
                 n, counts.get(n, ""), sex.get(n, ""),
-                titles.get(voices.get(n, ""), "")))
+                titles.get(voices.get(n, ""), ""),
+                f"{k:.2f}" if k else ""))
         # подсказка меняется по ходу дела: сперва «найдите», потом «раздайте
         # голоса», потом «идите проверять говорящих»
         done = sum(1 for v in voices.values() if v)
@@ -1559,11 +1577,17 @@ class App(tk.Tk):
         titles = core.voices_for(self.model_var.get())
         cur = self.roles["voices"].get(name, "")
         sex = self.roles.get("genders", {}).get(name, "")
-        dlg = VoiceDialog(self, name, titles, cur, sex)
+        k = self.roles.get("shifts", {}).get(name, 1.0)
+        dlg = VoiceDialog(self, name, titles, cur, sex, k)
         self.wait_window(dlg)
         if dlg.result is not None:
-            voice, sex = dlg.result
+            voice, sex, k = dlg.result
             self.roles["voices"][name] = voice
+            self.roles.setdefault("shifts", {})
+            if abs(k - 1.0) > 0.01:
+                self.roles["shifts"][name] = round(k, 2)
+            else:
+                self.roles["shifts"].pop(name, None)
             self.roles.setdefault("genders", {})
             if sex:
                 self.roles["genders"][name] = sex
@@ -1895,6 +1919,7 @@ class App(tk.Tk):
                                                   roles.get("genders"))
                         play = {"narrator": speaker,
                                 "voices": roles["voices"],
+                                "shifts": roles.get("shifts") or {},
                                 "speakers": [g[0] if g else None for g in got]}
                     pcm = core.render_section(
                         synth, items, speaker, opts,

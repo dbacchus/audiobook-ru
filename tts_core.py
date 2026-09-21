@@ -1973,6 +1973,45 @@ def write_wav(path: str, pcm):
         w.writeframes(pcm16.tobytes())
 
 
+def read_wav(path: str):
+    import numpy as np
+    with wave.open(path, "rb") as w:
+        raw = w.readframes(w.getnframes())
+    return np.frombuffer(raw, dtype="<i2").astype("float32") / 32767.0
+
+
+def shift_voice(pcm, k: float):
+    """Поднять голос в k раз -- высоту ВМЕСТЕ с формантами.
+
+    Детский голос отличается от взрослого не только высотой основного
+    тона: у ребёнка короче голосовой тракт, то есть выше и форманты.
+    Поэтому не «поднять тон», а пересэмплировать (asetrate поднимает и то,
+    и другое, заодно ускоряя) и вернуть темп обратно (atempo). На слух
+    2026-09-21: при k=1.28 женский голос читается как детский, а взрослым
+    ролям такое не нужно вовсе.
+
+    Без ffmpeg возвращаем звук как есть -- пусть лучше прозвучит взрослым
+    голосом, чем не прозвучит совсем."""
+    import numpy as np
+    ff = ffmpeg_exe()
+    if not ff or abs(k - 1.0) < 0.01 or len(pcm) == 0:
+        return pcm
+    import tempfile
+    d = tempfile.mkdtemp(prefix="voice_")
+    src, dst = os.path.join(d, "a.wav"), os.path.join(d, "b.wav")
+    try:
+        write_wav(src, pcm)
+        af = (f"asetrate={int(SAMPLE_RATE * k)},aresample={SAMPLE_RATE},"
+              f"atempo={1 / k:.5f}")
+        run_quiet([ff, "-y", "-i", src, "-af", af, dst])
+        return read_wav(dst)
+    except Exception:
+        return pcm
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def to_mp3(wav: str, mp3: str, title: str, track: int, album: str = "",
            artist: str = "", loudnorm: bool = True, quality: str = "2",
            log=None) -> bool:
@@ -2047,12 +2086,14 @@ def render_section(synth: Synth, items, speaker: str, opts: dict,
             # speakers идёт ОДИН В ОДИН с items, включая «brk» и заголовки:
             # считать по номеру озвученного абзаца нельзя, заголовки собьют
             who = play["speakers"][pos] if pos < len(play["speakers"]) else None
-            for text, voice in voice_plan(txt, who, play["voices"],
-                                          play.get("narrator", speaker)):
+            for text, voice, k in voice_plan(txt, who, play["voices"],
+                                             play.get("narrator", speaker),
+                                             play.get("shifts")):
                 if cancel is not None and cancel.is_set():
                     break
                 for chunk in split_long(text):
-                    parts.append(synth.say(chunk, voice, kind, use_ssml, rate))
+                    said = synth.say(chunk, voice, kind, use_ssml, rate)
+                    parts.append(shift_voice(said, k) if k != 1.0 else said)
                 parts.append(silence(opts.get("pause_seg", 0.18)))
             parts.append(silence(p_par))
         else:
@@ -2410,7 +2451,7 @@ def load_voices(acc_path: str) -> dict:
     {ключ строки: имя}}."""
     p = voices_path(acc_path)
     empty = {"narrator": "", "voices": {}, "speakers": {},
-             "genders": {}}
+             "genders": {}, "shifts": {}}
     if not os.path.exists(p):
         return empty
     try:
@@ -2424,7 +2465,8 @@ def load_voices(acc_path: str) -> dict:
 
 def save_voices(acc_path: str, data: dict):
     p = voices_path(acc_path)
-    if not any(data.get(k) for k in ("voices", "speakers", "genders")):
+    if not any(data.get(k) for k in ("voices", "speakers",
+                                     "genders", "shifts")):
         if os.path.exists(p):
             os.remove(p)
         return
@@ -2433,16 +2475,19 @@ def save_voices(acc_path: str, data: dict):
 
 
 def voice_plan(line: str, speaker: str | None, cast_voices: dict,
-               narrator: str) -> list:
-    """Строка -> [(текст, голос)].
+               narrator: str, shifts: dict = None) -> list:
+    """Строка -> [(текст, голос, подъём)].
 
     Слова автора внутри реплики читает РАССКАЗЧИК, а не персонаж: «— Он
     спросил, как пахнет смола, — сказала Аня. — Позавчера». Иначе Аня
-    произносит «сказала Аня», и это слышно как ошибка."""
+    произносит «сказала Аня», и это слышно как ошибка. Подъём голоса
+    (для детских ролей) относится только к словам персонажа."""
+    shifts = shifts or {}
     if not is_dialogue(line):
-        return [(line, narrator)]
+        return [(line, narrator, 1.0)]
     voice = cast_voices.get(speaker or "", narrator)
-    return [(text, narrator if kind == "author" else voice)
+    k = shifts.get(speaker or "", 1.0) if speaker in cast_voices else 1.0
+    return [(text, narrator, 1.0) if kind == "author" else (text, voice, k)
             for kind, text in split_reply(line)]
 
 
