@@ -678,9 +678,11 @@ class App(tk.Tk):
         self.f_hom = tk.BooleanVar(value=True)
         self.f_no = tk.BooleanVar(value=False)
         self.f_spk = tk.BooleanVar(value=False)
+        self.f_edit = tk.BooleanVar(value=False)
         for text_, var in (("е / ё", self.f_yo), ("омографы", self.f_hom),
                            ("без ударения", self.f_no),
-                           ("говорящие", self.f_spk)):
+                           ("говорящие", self.f_spk),
+                           ("правки", self.f_edit)):
             ttk.Checkbutton(fl, text=text_, variable=var,
                             command=self.check_text).pack(side="left", padx=8)
         self.issue_count = tk.StringVar(value="")
@@ -714,6 +716,7 @@ class App(tk.Tk):
         self.issues.bind("<Delete>", self._assign_key)
         self.issues.bind("<Return>", self._edit_issue)
         self.issues.bind("<Tab>", lambda e: (self._next_todo(), "break")[1])
+        self.issues.tag_configure("правка", background="#e8f5e9")
         self.issues.tag_configure("догадка", background="#fff8e1")
         self.issues.tag_configure("нет", background="#ffebee")
         self._issue_pos = {}
@@ -1288,10 +1291,13 @@ class App(tk.Tk):
         self.issues.delete(*self.issues.get_children())
         self._issue_pos = {}
         self._speaker_rows = {}
+        self._edit_rows = {}
+        if self.f_edit.get():
+            self._list_edits()
         if self.f_spk.get():
             self._list_speakers()
         if not kinds:
-            if not self.f_spk.get():
+            if not (self.f_spk.get() or self.f_edit.get()):
                 self.issue_count.set("")
             return
         data = self._txt_get()
@@ -1308,6 +1314,75 @@ class App(tk.Tk):
         self.issue_count.set(f"е/ё: {n['yo']}   омографов: {n['homograph']}   "
                              f"без ударения: {n['nostress']}"
                              + (f"   (показаны первые {limit})" if len(found) > limit else ""))
+
+    def _list_edits(self):
+        """Ручные правки этой главы -- в ту же таблицу, по слову на строку.
+
+        Правка хранится снимком строки вместе с автоматической версией на
+        момент правки; разница между ними и показывает, какие слова человек
+        менял на самом деле."""
+        # Правки принадлежат ГЛАВЕ, а не тому, что сейчас открыто: их файл
+        # привязан к размеченному тексту, даже если в окне исходник (так
+        # бывает после того, как разметку стёрли).
+        path = getattr(self, "_loaded_path", None)
+        if not path:
+            return
+        if not path.endswith(".acc.txt"):
+            path = self._acc_path(path)
+        edits = core.load_edits(path)
+        self._edits_path = path
+        src = [l for l in self._src_text.splitlines() if l.strip()] \
+            if getattr(self, "_src_text", None) else []
+        по_ключу = {core.line_key(l): l for l in src}
+        n = 0
+        for key, value in edits.items():
+            fixed, base = core.edit_parts(value)
+            строка = по_ключу.get(key, core.unstress(fixed))
+            # split(" ") -- тот же счёт, что и при снятии правки
+            пары = list(zip(base.split(" "), fixed.split(" "))) if base else []
+            менял = [(i, a, b) for i, (a, b) in enumerate(пары) if a != b]
+            if not менял:                       # старый формат или пусто
+                iid = f"e{n}"
+                self._edit_rows[iid] = (key, None)
+                self.issues.insert("", "end", iid=iid, tags=("правка",),
+                                   values=("снимок строки", "правка целиком",
+                                           core.unstress(строка)[:200]))
+                n += 1
+                continue
+            for i, a, b in менял:
+                iid = f"e{n}"
+                self._edit_rows[iid] = (key, i)
+                self.issues.insert("", "end", iid=iid, tags=("правка",),
+                                   values=(b, f"было {a}",
+                                           core.unstress(строка)[:200]))
+                n += 1
+        if n:
+            self.issue_count.set(f"ручных правок: {len(edits)} "
+                                 f"в {n} словах   (двойной клик или Delete — снять)")
+
+    def _drop_edit(self, iid):
+        """Снять одну правку -- вернуть этому слову автоматический вид."""
+        path = getattr(self, "_edits_path", None) or self._loaded_path
+        key, номер = self._edit_rows[iid]
+        edits = core.load_edits(path)
+        if key not in edits:
+            return
+        fixed, base = core.edit_parts(edits[key])
+        if номер is None or base is None:
+            edits.pop(key)
+        else:
+            # слова считаем ровно так же, как при показе -- split(" "),
+            # чтобы номер означал одно и то же в обе стороны
+            слова, основа = fixed.split(" "), base.split(" ")
+            if номер < len(слова) and номер < len(основа):
+                слова[номер] = основа[номер]
+            fixed = " ".join(слова)
+            edits[key] = {"fixed": fixed, "base": base}
+            if fixed == base:
+                edits.pop(key)                  # менять больше нечего
+        core.save_edits(path, edits)
+        self.log(f"Правка снята, осталось {len(edits)}")
+        self.check_text()
 
     def _list_speakers(self):
         """Реплики главы с говорящими -- в ту же таблицу проверки.
@@ -1354,6 +1429,10 @@ class App(tk.Tk):
     def _assign_key(self, event):
         """Цифра назначает говорящего выделенной реплике, 0 снимает."""
         sel = self.issues.selection()
+        if sel and sel[0] in getattr(self, "_edit_rows", {}):
+            if event.keysym == "Delete":
+                self._drop_edit(sel[0])
+            return "break"
         if not sel or sel[0] not in getattr(self, "_speaker_rows", {}):
             return
         iid = sel[0]
@@ -1430,6 +1509,9 @@ class App(tk.Tk):
     def _edit_issue(self, event=None):
         sel = self.issues.selection()
         if not sel:
+            return
+        if sel[0] in getattr(self, "_edit_rows", {}):
+            self._drop_edit(sel[0])
             return
         if sel[0] in getattr(self, "_speaker_rows", {}):
             self._pick_speaker(sel[0])
