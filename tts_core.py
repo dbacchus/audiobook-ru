@@ -1981,6 +1981,28 @@ def write_wav(path: str, pcm):
         w.writeframes(pcm16.tobytes())
 
 
+def trim_silence(pcm, keep_head: float = 0.0, keep_tail: float = 0.06,
+                 level: float = 0.01):
+    """Срезать тишину по краям куска, оставив указанный запас.
+
+    Каждый вызов синтеза начинается с разгона (LEADIN_MS) и собственного
+    «вдоха» модели -- около секунды, и в конце ещё четверть. На абзац это
+    звучит естественно, но в аудиоспектакле реплика режется на куски по
+    голосам, и тишина набегает на каждом стыке: у реплики из трёх частей
+    выходило около трёх секунд вместо одной (измерено 2026-09-21, Денис
+    услышал лишнюю паузу на смене голоса)."""
+    import numpy as np
+    if len(pcm) == 0:
+        return pcm
+    loud = np.abs(pcm) > level
+    if not loud.any():
+        return pcm[:0]
+    i = max(0, int(loud.argmax()) - int(keep_head * SAMPLE_RATE))
+    j = min(len(pcm), len(pcm) - int(loud[::-1].argmax())
+            + int(keep_tail * SAMPLE_RATE))
+    return pcm[i:j]
+
+
 def read_wav(path: str):
     import numpy as np
     with wave.open(path, "rb") as w:
@@ -2107,15 +2129,26 @@ def render_section(synth: Synth, items, speaker: str, opts: dict,
             # speakers идёт ОДИН В ОДИН с items, включая «brk» и заголовки:
             # считать по номеру озвученного абзаца нельзя, заголовки собьют
             who = play["speakers"][pos] if pos < len(play["speakers"]) else None
-            for text, voice, k in voice_plan(txt, who, play["voices"],
-                                             play.get("narrator", speaker),
-                                             play.get("shifts")):
+            plan = voice_plan(txt, who, play["voices"],
+                              play.get("narrator", speaker), play.get("shifts"))
+            # Разгон и «вдох» модели нужны ОДИН РАЗ, в начале реплики: внутри
+            # неё каждый кусок приносил бы ещё около секунды тишины, и на
+            # смене голоса слышалась лишняя пауза. Поэтому у всех кусков,
+            # кроме первого, голова срезается, а между ними ставится короткая
+            # пауза -- такая, какая бывает в живой речи перед словами автора.
+            gap = opts.get("pause_seg", 0.07)
+            for m, (text, voice, k) in enumerate(plan):
                 if cancel is not None and cancel.is_set():
                     break
-                for chunk in split_long(text):
+                for c, chunk in enumerate(split_long(text)):
                     said = synth.say(chunk, voice, kind, use_ssml, rate)
-                    parts.append(shift_voice(said, k) if k != 1.0 else said)
-                parts.append(silence(opts.get("pause_seg", 0.18)))
+                    if k != 1.0:
+                        said = shift_voice(said, k)
+                    if m or c:
+                        said = trim_silence(said)
+                    parts.append(said)
+                if m < len(plan) - 1:
+                    parts.append(silence(gap))
             parts.append(silence(p_par))
         else:
             voice = play.get("narrator", speaker) if play is not None else speaker
