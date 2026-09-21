@@ -629,6 +629,12 @@ class App(tk.Tk):
                         command=self._reload_view).pack(side="right")
         ttk.Radiobutton(head, text="исходный", value="src", variable=self.view_var,
                         command=self._reload_view).pack(side="right", padx=6)
+        # «ко́шка» читается глазами легче, чем «к+ошка». В файле при этом
+        # остаётся плюс: на клавиатуре ударных букв нет, и править удобнее им.
+        self.marks_var = tk.BooleanVar(
+            value=self.settings.get("accent_marks", True))
+        ttk.Checkbutton(head, text="ударения знаком", variable=self.marks_var,
+                        command=self._toggle_marks).pack(side="right", padx=12)
 
         self.font_size = self.settings.get("font_size", 12)
         self.text = tk.Text(right, wrap="word", font=("Segoe UI", self.font_size),
@@ -967,7 +973,8 @@ class App(tk.Tk):
             rest = spent / cur * (total - cur)
             left = f", осталось ~{rest/60:.0f} мин" if rest > 90 else f", осталось ~{rest:.0f} с"
         pct = 100 * cur // max(1, total)
-        self.status_var.set(f"{pct}%  ({cur} из {total}{left})  {label[:50]}")
+        shown = core.to_accent_marks(label) if self.marks_var.get() else label
+        self.status_var.set(f"{pct}%  ({cur} из {total}{left})  {shown[:50]}")
 
     def set_busy(self, busy, name=""):
         self.btn_stop.configure(state="normal" if busy else "disabled")
@@ -1103,11 +1110,30 @@ class App(tk.Tk):
         self._loaded_path = path
         self._loaded_text = data
         self._edits = core.load_edits(accp) if path == accp else {}
-        self.text.delete("1.0", "end")
-        self.text.insert("1.0", data)
+        self._txt_set(data)
         self.text.edit_modified(False)
         self.highlight()
         self.check_text()
+
+    def _txt_set(self, data: str):
+        """Показать текст в поле: ударение -- надстрочным знаком, если так
+        выбрано. В файле и в синтезе оно остаётся плюсом."""
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", core.to_accent_marks(data)
+                         if self.marks_var.get() else data)
+
+    def _txt_get(self, a: str = "1.0", b: str = "end-1c") -> str:
+        """Текст из поля ВСЕГДА с плюсами -- в каком бы виде он ни показан.
+
+        Перевод обратим символ в символ и длину не меняет, поэтому
+        координаты подсветки и спорных мест остаются верными."""
+        return core.from_accent_marks(self.text.get(a, b))
+
+    def _toggle_marks(self):
+        data = self._txt_get()
+        self._txt_set(data)
+        self.highlight()
+        self.settings["accent_marks"] = self.marks_var.get()
 
     def _dirty(self):
         return bool(self.text.edit_modified()) and getattr(self, "_loaded_path", None)
@@ -1120,7 +1146,7 @@ class App(tk.Tk):
         path = getattr(self, "_loaded_path", None)
         if not path:
             return
-        data = self.text.get("1.0", "end-1c")
+        data = self._txt_get()
         with open(path, "w", encoding="utf-8") as f:
             f.write(data)
         msg = f"Сохранено: {os.path.basename(path)}"
@@ -1208,8 +1234,7 @@ class App(tk.Tk):
         if not n:
             self.log("Импорт: изменений нет.")
             return
-        self.text.delete("1.0", "end")
-        self.text.insert("1.0", new)
+        self._txt_set(new)
         self.text.edit_modified(True)
         self.save_text()                      # правки попадут в список правок главы
         self.highlight()
@@ -1222,7 +1247,7 @@ class App(tk.Tk):
         Строки, поправленные руками, помечены светлым фоном целиком."""
         for tag in ("yo", "homograph", "nostress", "indict", "found", "edited"):
             self.text.tag_remove(tag, "1.0", "end")
-        data = self.text.get("1.0", "end-1c")
+        data = self._txt_get()
         edits = getattr(self, "_edits", {}) or {}
         src_lines = getattr(self, "_src_text", "").splitlines()
         for i, line in enumerate(data.splitlines(), 1):
@@ -1256,7 +1281,7 @@ class App(tk.Tk):
             if not self.f_spk.get():
                 self.issue_count.set("")
             return
-        data = self.text.get("1.0", "end-1c")
+        data = self._txt_get()
         found = core.analyze(data, kinds)
         label = {"yo": "е или ё — по смыслу", "homograph": "ударение — по смыслу",
                  "nostress": "нет ударения"}
@@ -1277,7 +1302,7 @@ class App(tk.Tk):
         Абзацы берём через parse_text, тем же путём, что и озвучка: иначе
         ключ строки не совпадёт и назначение не найдётся при синтезе."""
         self._load_roles()
-        data = self.text.get("1.0", "end-1c")
+        data = self._txt_get()
         sections = core.parse_text(data, split_chapters=False)
         if not sections:                       # глава не открыта
             self.issue_count.set("")
@@ -1357,7 +1382,7 @@ class App(tk.Tk):
     def _word_at(self, index):
         """Слово под курсором вместе с «+» (стандартный wordchars их не считает)."""
         line, col = map(int, self.text.index(index).split("."))
-        s = self.text.get(f"{line}.0", f"{line}.end")
+        s = self._txt_get(f"{line}.0", f"{line}.end")
         for m in core.WORD_RE.finditer(s):
             if m.start() <= col <= m.end():
                 return m.group(0), f"{line}.{m.start()}", f"{line}.{m.end()}"
@@ -1368,7 +1393,7 @@ class App(tk.Tk):
         if not word or core.count_vowels(word) < 1:
             return
         line = a.split(".")[0]
-        self._change_word(word, a, b, self.text.get(f"{line}.0", f"{line}.end")[:220])
+        self._change_word(word, a, b, self._txt_get(f"{line}.0", f"{line}.end")[:220])
 
     @staticmethod
     def _sub_same(m, plain, form):
@@ -1401,16 +1426,16 @@ class App(tk.Tk):
                 self.acc_engine.set_dictionary(self.dictionary)
             self.log(f"В словарь: {plain.lower()} -> {val}")
         if scope in ("dict", "file"):
-            data = self.text.get("1.0", "end-1c")
+            data = self._txt_get()
             new = core.WORD_RE.sub(lambda m: self._sub_same(m, plain, form), data)
             if new != data:
                 pos = self.text.yview()[0]
-                self.text.delete("1.0", "end")
-                self.text.insert("1.0", new)
+                self._txt_set(new)
                 self.text.yview_moveto(pos)
         else:
             self.text.delete(a, b)
-            self.text.insert(a, form)
+            self.text.insert(a, core.to_accent_marks(form)
+                             if self.marks_var.get() else form)
         self.text.edit_modified(True)
         # правку сразу закрепляем в файле с ударениями: «только здесь» тогда
         # попадёт в список правок и переживёт повторную расстановку
@@ -1768,10 +1793,10 @@ class App(tk.Tk):
 
     def preview_selection(self):
         try:
-            txt = self.text.get("sel.first", "sel.last").strip()
+            txt = self._txt_get("sel.first", "sel.last").strip()
         except tk.TclError:
             line = self.text.index("insert").split(".")[0]
-            txt = self.text.get(f"{line}.0", f"{line}.end").strip()
+            txt = self._txt_get(f"{line}.0", f"{line}.end").strip()
         if not txt:
             return
         if txt.startswith("#"):
@@ -1996,6 +2021,7 @@ class App(tk.Tk):
                  loudnorm=self.loud_var.get(), merge=self.merge_var.get(),
                  use_acc=self.useacc_var.get(), split_chapters=self.split_var.get(),
                  play_mode=self.play_var.get(),
+                 accent_marks=self.marks_var.get(),
                  album=self.album_var.get(), artist=self.artist_var.get(),
                  out_dir=self.out_var.get(), font_size=self.font_size)
         try:
