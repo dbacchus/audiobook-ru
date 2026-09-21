@@ -792,7 +792,11 @@ class App(tk.Tk):
         # список ролей занял ещё одну строку сетки -- без этого следующее
         # поле сядет поверх него
         r += 1
-        self._toggle_play()
+        # Поиск персонажей читает все главы и пишет в журнал, а журнала
+        # в эту минуту ещё нет -- он создаётся ниже. Поэтому панель прячем
+        # сразу, а считаем, когда окно уже собрано.
+        self.roles_frame.grid_remove()
+        self.after_idle(self._toggle_play)
 
         r += 1
         ttk.Label(grid, text="Книга / автор").grid(row=r, column=0, sticky="w")
@@ -876,6 +880,12 @@ class App(tk.Tk):
 
     # -- состояние окна ------------------------------------------------
     def log(self, text):
+        # Журнал создаётся в середине сборки окна, а писать в него может
+        # захотеться и раньше -- тогда сообщение просто уходит в стандартный
+        # вывод (он перенаправлен в app.log), а окно не падает.
+        if not hasattr(self, "logbox"):
+            print(text.rstrip())
+            return
         self.logbox.insert("end", text.rstrip() + "\n")
         self.logbox.see("end")
 
@@ -1439,12 +1449,25 @@ class App(tk.Tk):
             self.roles_frame.grid()
             if not getattr(self, "roles", None):
                 self._load_roles()
-            self._refresh_roles()
+            # Голоса и род лежат в файле, а список персонажей с числом реплик
+            # считается по тексту и нигде не хранится. Поэтому после запуска
+            # его надо посчитать заново -- сам, а не кнопкой: иначе таблица
+            # покажет только тех, у кого уже есть голос, а разбору говорящих
+            # не хватит остальных имён для якорей.
+            if not getattr(self, "_role_counts", None):
+                self._find_roles()
+            else:
+                self._refresh_roles()
         else:
             self.roles_frame.grid_remove()
 
     def _characters(self):
-        """Все персонажи книги: найденные в тексте плюс добавленные руками."""
+        """Все персонажи книги: найденные в тексте плюс добавленные руками.
+
+        Если ещё не считали -- посчитаем: без этого разбор говорящих
+        останется без якорей на тех, кому не выбран голос."""
+        if not getattr(self, "_role_counts", None):
+            self._find_roles()
         return dict(getattr(self, "_role_counts", {}))
 
     def _role_add(self):
