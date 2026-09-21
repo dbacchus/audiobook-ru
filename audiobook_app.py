@@ -754,6 +754,9 @@ class App(tk.Tk):
                    command=self._role_clear).pack(side="left", padx=6)
         ttk.Button(rb, text="Добавить персонажа",
                    command=self._role_add).pack(side="left")
+        # список ролей занял ещё одну строку сетки -- без этого следующее
+        # поле сядет поверх него
+        r += 1
         self._toggle_play()
 
         r += 1
