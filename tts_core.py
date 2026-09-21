@@ -2756,14 +2756,31 @@ def _guess_scene(lines: list, cast: dict, known: dict = None,
 
     a, b = voices
     other = {a: b, b: a}
-    pos = {i: n for n, i in enumerate(idx)}          # номер реплики по порядку
-    for i in idx:
-        if out[i][1] == "точно" or i in по_действию:
+    # Считаем чётность только внутри НЕПРЕРЫВНОЙ череды реплик. Абзац
+    # повествования между репликами -- это ровно то место, где очередь
+    # сбивается: автор ставит паузу («Он посмотрел на неё.»), и дальше
+    # говорит тот же человек. Через такой абзац чётность переносить
+    # нельзя, а внутри череды она держится.
+    череды, текущая = [], []
+    for k in idx:
+        if текущая and k != текущая[-1] + 1:
+            череды.append(текущая)
+            текущая = []
+        текущая.append(k)
+    if текущая:
+        череды.append(текущая)
+
+    for череда in череды:
+        свои = {i: anchors[i] for i in череда if i in anchors}
+        if not свои:
             continue
-        near = min(anchors, key=lambda k: abs(pos[k] - pos[i]))
-        step = abs(pos[near] - pos[i])
-        who = anchors[near] if step % 2 == 0 else other[anchors[near]]
-        out[i] = (who, "догадка")
+        for i in череда:
+            if out[i][1] == "точно" or i in по_действию:
+                continue
+            near = min(свои, key=lambda k: abs(k - i))
+            step = abs(near - i)
+            who = свои[near] if step % 2 == 0 else other[свои[near]]
+            out[i] = (who, "догадка")
 
     # Последняя проверка: назначенный НЕ ДОЛЖЕН противоречить роду глагола.
     # «— Проголосовали, — сказала она» доставалась Кузьме -- чередование
