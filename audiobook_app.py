@@ -673,7 +673,9 @@ class App(tk.Tk):
         rpan.add(low, weight=1)
         fl = ttk.Frame(low)
         fl.pack(fill="x")
-        ttk.Label(fl, text="Проверить глазами:", style="Head.TLabel").pack(side="left")
+        # Пять галочек, счётчик и подсказка в одну строку уже не влезали --
+        # счётчик срезался краем окна. Счётчик унесён строкой ниже.
+        ttk.Label(fl, text="Показать:", style="Head.TLabel").pack(side="left")
         self.f_yo = tk.BooleanVar(value=True)
         self.f_hom = tk.BooleanVar(value=True)
         self.f_no = tk.BooleanVar(value=False)
@@ -685,12 +687,18 @@ class App(tk.Tk):
                            ("правки", self.f_edit)):
             ttk.Checkbutton(fl, text=text_, variable=var,
                             command=self.check_text).pack(side="left", padx=8)
-        self.issue_count = tk.StringVar(value="")
-        ttk.Label(fl, textvariable=self.issue_count, style="Hint.TLabel").pack(side="left", padx=10)
         ttk.Label(fl, text="двойной клик — правка", style="Hint.TLabel").pack(side="right")
-        self.speakers_hint = tk.StringVar(value="")
-        ttk.Label(low, textvariable=self.speakers_hint, style="Hint.TLabel"
+
+        # Вторая строка -- счётчик, третья -- раскладка клавиш. Вместе они
+        # не влезают: одна раскладка с девятью именами занимает 2200 точек.
+        # Раскладке заодно задан перенос, чтобы её не срезало при любой
+        # ширине окна.
+        self.issue_count = tk.StringVar(value="")
+        ttk.Label(low, textvariable=self.issue_count, style="Hint.TLabel"
                   ).pack(anchor="w")
+        self.speakers_hint = tk.StringVar(value="")
+        ttk.Label(low, textvariable=self.speakers_hint, style="Hint.TLabel",
+                  wraplength=self.px(1500), justify="left").pack(anchor="w")
 
         wrap = ttk.Frame(low)
         wrap.pack(fill="both", expand=True, pady=2)
@@ -1420,8 +1428,8 @@ class App(tk.Tk):
         self._keys = sorted(set(self.roles.get("voices", {})) | set(счёт),
                             key=lambda x: (-счёт.get(x, 0), x))[:9]
         подсказка = "   ".join(f"{k+1} {имя}" for k, имя in enumerate(self._keys))
-        self.speakers_hint.set("цифра — назначить, Tab — к следующей "
-                               "неразобранной, 0 — снять:   " + подсказка)
+        self.speakers_hint.set("1—9 назначить, Tab дальше, 0 снять:   "
+                               + подсказка)
         self.issue_count.set(f"реплик: назначено {n['точно']}, "
                              f"догадка {n['догадка']}, "
                              f"без говорящего {n['нет']}")
