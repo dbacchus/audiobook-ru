@@ -259,6 +259,39 @@ class StressDialog(tk.Toplevel):
         self.destroy()
 
 
+class NameDialog(tk.Toplevel):
+    """Имя, которого не нашлось само: выбрать из имён книги или вписать."""
+
+    def __init__(self, parent, candidates: list):
+        super().__init__(parent)
+        self.title("Добавить имя")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.result = None
+
+        ttk.Label(self, text="Имя, как оно стоит в словах автора"
+                  ).grid(row=0, column=0, padx=16, pady=(14, 2), sticky="w")
+        self.box = ttk.Combobox(self, width=32, values=candidates)
+        self.box.grid(row=1, column=0, padx=16, sticky="we")
+        ttk.Label(self, text=f"в списке {len(candidates)} имён собственных "
+                             "этой книги; можно и вписать своё",
+                  style="Hint.TLabel").grid(row=2, column=0, padx=16, sticky="w")
+
+        btns = ttk.Frame(self)
+        btns.grid(row=3, column=0, padx=16, pady=12, sticky="e")
+        ttk.Button(btns, text="Добавить", command=self._ok).pack(side="left", padx=4)
+        ttk.Button(btns, text="Отмена", command=self.destroy).pack(side="left")
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+        self.wait_visibility()
+        self.box.focus()
+
+    def _ok(self):
+        self.result = self.box.get()
+        self.destroy()
+
+
 class VoiceDialog(tk.Toplevel):
     """Каким голосом говорит персонаж. Список голосов и проба."""
 
@@ -734,8 +767,10 @@ class App(tk.Tk):
                               sticky="we", padx=(0, 6))
         rf = self.roles_frame
         ttk.Label(rf, text="Роли", style="Head.TLabel").pack(anchor="w")
-        ttk.Label(rf, text="двойной клик — выбрать голос; кто без голоса, "
-                           "того читает рассказчик",
+        self.roles_hint = ttk.Label(rf, text="", style="Head.TLabel")
+        self.roles_hint.pack(anchor="w")
+        ttk.Label(rf, text="кто остался без голоса, того читает рассказчик — "
+                           "для эпизодических это нормально",
                   style="Hint.TLabel").pack(anchor="w")
         self.roles_tree = ttk.Treeview(rf, columns=("who", "n", "sex", "voice"),
                                        show="headings", height=7)
@@ -752,7 +787,7 @@ class App(tk.Tk):
                    command=self._find_roles).pack(side="left")
         ttk.Button(rb, text="Убрать голос",
                    command=self._role_clear).pack(side="left", padx=6)
-        ttk.Button(rb, text="Добавить персонажа",
+        ttk.Button(rb, text="Добавить имя…",
                    command=self._role_add).pack(side="left")
         # список ролей занял ещё одну строку сетки -- без этого следующее
         # поле сядет поверх него
@@ -1415,19 +1450,32 @@ class App(tk.Tk):
     def _role_add(self):
         """Имя, которое не нашлось само.
 
-        Признак «пишется с большой буквы в середине фразы» промахивается,
-        если персонажа называют только в начале предложения."""
-        name = simpledialog.askstring("Добавить персонажа",
-                                      "Имя, как оно стоит в словах автора:",
-                                      parent=self)
-        if not name or not name.strip():
+        Печатать вручную незачем: имена собственные книги уже известны,
+        поэтому предлагаем выбрать из них -- те, что ещё не в списке ролей.
+        Признак «с большой буквы в середине фразы» промахивается, если
+        персонажа называют только в начале предложения, и вот для таких
+        случаев поле остаётся открытым для ввода."""
+        have = set(getattr(self, "_role_counts", {})) | set(self.roles.get("voices", {}))
+        lines = getattr(self, "_src_lines", None)
+        if lines is None:
+            self._find_roles()
+            lines = getattr(self, "_src_lines", [])
+        cand = sorted(core.proper_names(lines) - have)
+        dlg = NameDialog(self, cand)
+        self.wait_window(dlg)
+        name = (dlg.result or "").strip()
+        if not name:
             return
-        name = name.strip()
+        if name in have:
+            messagebox.showinfo("Уже есть", f"«{name}» уже в списке ролей.")
+            return
         self._role_counts = dict(getattr(self, "_role_counts", {}))
-        self._role_counts.setdefault(name, 0)
+        self._role_counts[name] = 0
         self.roles.setdefault("voices", {}).setdefault(name, "")
         self._save_roles()
         self._refresh_roles()
+        self.roles_tree.selection_set(name)
+        self.roles_tree.see(name)
 
     def _refresh_roles(self):
         self.roles_tree.delete(*self.roles_tree.get_children())
@@ -1441,6 +1489,19 @@ class App(tk.Tk):
             self.roles_tree.insert("", "end", iid=n, values=(
                 n, counts.get(n, ""), sex.get(n, ""),
                 titles.get(voices.get(n, ""), "")))
+        # подсказка меняется по ходу дела: сперва «найдите», потом «раздайте
+        # голоса», потом «идите проверять говорящих»
+        done = sum(1 for v in voices.values() if v)
+        if not names:
+            self.roles_hint.configure(
+                text="Шаг 1: нажмите «Найти персонажей в тексте»")
+        elif not done:
+            self.roles_hint.configure(
+                text="Шаг 2: двойной клик по персонажу — выбрать ему голос")
+        else:
+            self.roles_hint.configure(
+                text=f"Голосов роздано: {done}. Шаг 3: вкладка «1. Текст и "
+                     f"ударения», внизу галочка «говорящие»")
 
     def _find_roles(self):
         """Персонажи из слов автора по всем главам."""
