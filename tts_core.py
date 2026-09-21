@@ -2340,6 +2340,53 @@ def speaker_from_lead(text: str, cast, genders: dict = None,
     return None
 
 
+# Местоимение должно быть ПОДЛЕЖАЩИМ при глаголе речи: «сказал он», «она
+# ответила». Просто «он» где-то в словах автора не годится -- в «сказал шар.
+# Голос был тот же... теперь он звучал совсем близко» это «он» про голос, а
+# говорящий назван, только он не из списка ролей.
+PRONOUN_HE_SHE = re.compile(
+    rf"(?:{SPEECH_VERB})\s+(?:он|она)\b|\b(?:он|она)\s+(?:{SPEECH_VERB})",
+    re.IGNORECASE)
+
+
+def speaker_from_pronoun(before: list, cast, genders: dict, chunk: str):
+    """Кто такой «он» в «— Ильич, — сказал он».
+
+    Имя названо в предыдущем абзаце: «Первым увидел Кузьма. Он вообще всё
+    видел первым... — Ильич, — сказал он» (пример Дениса 2026-09-21).
+    Берём ближайшее к концу повествования имя подходящего рода.
+
+    Имя ищется ТОЛЬКО в именительном падеже, буква в букву. Косвенный
+    падеж -- это почти всегда не тот, кто действует, а тот, кому: в
+    «отдал Тихону колесо и встал рядом. -- Держи, -- сказал он» говорит
+    не Тихон, а тот, кто отдал; в «ответил не Фёдору, а Ане» -- тем
+    более. Правило держится на том, что подлежащее стоит в именительном,
+    и на проверке это решило четыре ошибки из пяти.
+
+    Возвращает (имя, точно ли): точно -- когда в том абзаце вообще один
+    человек этого рода, иначе это выбор из нескольких и лучше пометить
+    догадкой."""
+    род = verb_gender(chunk)
+    if not род or not PRONOUN_HE_SHE.search(unstress(chunk)):
+        return None, False
+    for текст in before:
+        unstype = unstress(текст or "")
+        места = []
+        for имя, формы in _cast_forms(cast).items():
+            if genders.get(имя) != род:
+                continue
+            for f in формы:
+                все = list(re.finditer(rf"\b{re.escape(f)}\b", unstype,
+                                       re.IGNORECASE))
+                if все:
+                    места.append((все[-1].start(), имя))
+        if места:
+            места.sort()
+            кто = места[-1][1]
+            return кто, len({и for _, и in места}) == 1
+    return None, False
+
+
 def _cast_forms(cast) -> dict:
     """Роли в общем виде {имя: (как его называют в тексте, ...)}.
 
@@ -2430,13 +2477,14 @@ def guess_speakers(items: list, cast: dict, known: dict = None,
     out = [None] * len(texts)
     for a, b in (_scene_bounds(items) if paired else [(0, len(texts))]):
         for k, res in zip(range(a, b),
-                          _guess_scene(texts[a:b], cast, known, genders)):
+                          _guess_scene(texts[a:b], cast, known, genders,
+                                       texts[max(0, a - 4):a])):
             out[k] = res
     return out
 
 
 def _guess_scene(lines: list, cast: dict, known: dict = None,
-                 genders: dict = None) -> list:
+                 genders: dict = None, before: list = None) -> list:
     """Кто говорит в каждой реплике сцены.
 
     Возвращает список той же длины, что lines: None для повествования,
@@ -2448,10 +2496,18 @@ def _guess_scene(lines: list, cast: dict, known: dict = None,
     очереди, и от якоря с именем можно считать в обе стороны. Точность
     измерена на повести -- 81%. В сцене на троих и больше чередование
     бессмысленно, и такие реплики остаются без говорящего: пусть их
-    назначит человек, чем машина уверенно соврёт."""
+    назначит человек, чем машина уверенно соврёт.
+
+    before -- несколько абзацев ПЕРЕД сценой. Сцену обрывают два абзаца
+    повествования подряд, а говорящего следующей реплики называет как раз
+    последний из них («Первым увидел Кузьма... — Ильич, — сказал он»), так
+    что правилам «посмотреть назад» одной сцены мало."""
     known = known or {}
     out = [None] * len(lines)
     idx = [i for i, l in enumerate(lines) if is_dialogue(l)]
+    before = list(before or [])
+    сдвиг = len(before)
+    контекст = before + list(lines)        # сцена вместе с подводкой к ней
 
     anchors = {}
     for i in idx:
@@ -2474,15 +2530,35 @@ def _guess_scene(lines: list, cast: dict, known: dict = None,
     # «Матвей Ильич ... и сказал:» -- говорящий назван прямо, только не
     # внутри реплики. Считаем это точным: тут не догадка, а указание.
     for i in idx:
-        if out[i][1] == "точно" or i == 0:
+        if out[i][1] == "точно" or i + сдвиг == 0:
             continue
-        who = speaker_from_lead(lines[i - 1], cast, genders,
+        who = speaker_from_lead(контекст[сдвиг + i - 1], cast, genders,
                                 list(dict.fromkeys(anchors.values())))
         if who:
             anchors[i] = who
             out[i] = (who, "точно")
 
-    # Третий источник: род глагола. «— сказала она» не называет имени,
+    # Третий источник: местоимение в словах автора. «— Ильич, — сказал он»
+    # имени не называет, но предыдущий абзац его называет: «Первым увидел
+    # Кузьма. Он вообще всё видел первым...». Берём ближайшее имя нужного
+    # рода; если в том абзаце человек этого рода один -- это не догадка.
+    for i in idx:
+        if out[i][1] == "точно" or i + сдвиг == 0:
+            continue
+        куски = [c for k, c in split_reply(lines[i]) if k == "author"]
+        if not куски:
+            continue
+        n = сдвиг + i
+        назад = [контекст[j] for j in range(n - 1, max(-1, n - 4), -1)
+                 if not is_dialogue(контекст[j])]
+        кто, точно = speaker_from_pronoun(назад, cast, genders or {},
+                                          " ".join(куски))
+        if кто:
+            out[i] = (кто, "точно" if точно else "догадка")
+            if точно:
+                anchors[i] = кто
+
+    # Четвёртый источник: род глагола. «— сказала она» не называет имени,
     # но глагол согласован с говорящим, и если в сцене женщина одна, говорящий
     # определён точно, а не догадкой. Так спасаются реплики с «он/она».
     present = list(dict.fromkeys(anchors.values()))
@@ -2524,6 +2600,20 @@ def _guess_scene(lines: list, cast: dict, known: dict = None,
         step = abs(pos[near] - pos[i])
         who = anchors[near] if step % 2 == 0 else other[anchors[near]]
         out[i] = (who, "догадка")
+
+    # Последняя проверка: назначенный НЕ ДОЛЖЕН противоречить роду глагола.
+    # «— Проголосовали, — сказала она» доставалась Кузьме -- чередование
+    # не смотрит на то, что глагол женский. Лучше оставить без говорящего,
+    # чем отдать реплику заведомо не тому.
+    if genders:
+        for i in idx:
+            кто, как = out[i]
+            if not кто or как == "точно":
+                continue
+            куски = [c for k, c in split_reply(lines[i]) if k == "author"]
+            род = verb_gender(" ".join(куски)) if куски else None
+            if род and genders.get(кто) and genders[кто] != род:
+                out[i] = (None, "нет")
     return out
 
 
