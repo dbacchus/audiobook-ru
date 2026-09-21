@@ -686,6 +686,9 @@ class App(tk.Tk):
         self.issue_count = tk.StringVar(value="")
         ttk.Label(fl, textvariable=self.issue_count, style="Hint.TLabel").pack(side="left", padx=10)
         ttk.Label(fl, text="двойной клик — правка", style="Hint.TLabel").pack(side="right")
+        self.speakers_hint = tk.StringVar(value="")
+        ttk.Label(low, textvariable=self.speakers_hint, style="Hint.TLabel"
+                  ).pack(anchor="w")
 
         wrap = ttk.Frame(low)
         wrap.pack(fill="both", expand=True, pady=2)
@@ -703,6 +706,16 @@ class App(tk.Tk):
         self.issues.pack(side="left", fill="both", expand=True)
         self.issues.bind("<<TreeviewSelect>>", self._goto_issue)
         self.issues.bind("<Double-1>", self._edit_issue)
+        # разбор говорящих с клавиатуры: цифра ставит роль, курсор идёт
+        # к следующей неразобранной реплике
+        for i in range(1, 10):
+            self.issues.bind(str(i), self._assign_key)
+        self.issues.bind("<Key-0>", self._assign_key)
+        self.issues.bind("<Delete>", self._assign_key)
+        self.issues.bind("<Return>", self._edit_issue)
+        self.issues.bind("<Tab>", lambda e: (self._next_todo(), "break")[1])
+        self.issues.tag_configure("догадка", background="#fff8e1")
+        self.issues.tag_configure("нет", background="#ffebee")
         self._issue_pos = {}
         return f
 
@@ -1323,12 +1336,59 @@ class App(tk.Tk):
             n[how if who else "нет"] += 1
             iid = f"s{i}"
             self._speaker_rows[iid] = text
-            self.issues.insert("", "end", iid=iid,
-                               values=(who or "—", label[how if who else "нет"],
+            вид = how if who else "нет"
+            self.issues.insert("", "end", iid=iid, tags=(вид,),
+                               values=(who or "—", label[вид],
                                        core.unstress(text)[:200]))
+        # цифры раздаём по числу реплик: чаще говорит -- меньше цифра
+        счёт = self._characters()
+        self._keys = sorted(set(self.roles.get("voices", {})) | set(счёт),
+                            key=lambda x: (-счёт.get(x, 0), x))[:9]
+        подсказка = "   ".join(f"{k+1} {имя}" for k, имя in enumerate(self._keys))
+        self.speakers_hint.set("цифра — назначить, Tab — к следующей "
+                               "неразобранной, 0 — снять:   " + подсказка)
         self.issue_count.set(f"реплик: назначено {n['точно']}, "
                              f"догадка {n['догадка']}, "
                              f"без говорящего {n['нет']}")
+
+    def _assign_key(self, event):
+        """Цифра назначает говорящего выделенной реплике, 0 снимает."""
+        sel = self.issues.selection()
+        if not sel or sel[0] not in getattr(self, "_speaker_rows", {}):
+            return
+        iid = sel[0]
+        key = core.line_key(core.unstress(self._speaker_rows[iid]))
+        имена = getattr(self, "_keys", [])
+        if event.keysym in ("0", "Delete"):
+            self.roles["speakers"].pop(key, None)
+        else:
+            k = int(event.char) - 1
+            if not (0 <= k < len(имена)):
+                return "break"
+            self.roles["speakers"][key] = имена[k]
+        self._save_roles()
+        место = self.issues.yview()[0]
+        self.check_text()
+        self.issues.yview_moveto(место)
+        self._next_todo(после=iid)
+        return "break"
+
+    def _next_todo(self, после=None):
+        """Перейти к следующей реплике без говорящего или с догадкой."""
+        строки = self.issues.get_children()
+        начало = 0
+        if после in строки:
+            начало = строки.index(после) + 1
+        for i in list(строки[начало:]) + list(строки[:начало]):
+            if "точно" in self.issues.item(i, "tags"):
+                continue
+            if i not in getattr(self, "_speaker_rows", {}):
+                continue
+            self.issues.selection_set(i)
+            self.issues.focus(i)
+            self.issues.see(i)
+            return
+        self.status("Все реплики разобраны")
 
     def _pick_speaker(self, iid):
         text = self._speaker_rows[iid]
