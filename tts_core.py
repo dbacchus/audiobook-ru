@@ -2328,13 +2328,45 @@ def proper_names(lines: list) -> set:
         # начало предложения: после точки, восклицательного, вопросительного,
         # многоточия, открывающей кавычки или тире прямой речи
         for m in re.finditer(r"[А-ЯЁ][а-яё]{2,}", text):
-            before = text[:m.start()].rstrip()
+            # Закрывающие кавычки и скобки сами по себе конца фразы не
+            # значат, но и не отменяют его: «…скопировать?» Она не знает» --
+            # предложение кончилось знаком ВНУТРИ кавычки, а «Она» начинает
+            # новое. Поэтому смотрим на знак перед закрывающей кавычкой.
+            before = text[:m.start()].rstrip().rstrip("»\"')]")
             if not before:
                 continue                      # первое слово строки
             if before[-1] in ".!?…:«\"'([-—–":
                 continue                      # первое слово предложения
             found.add(m.group(0))
     return found
+
+
+def _name_stem(name: str) -> str:
+    """Основа имени без падежного окончания: «Аня», «Ане», «Аню» -> «Ан»."""
+    return name.rstrip("аеёийоуыэюя").lower()
+
+
+def merge_name_forms(counts: dict) -> dict:
+    """Склеить падежные формы одного имени в одну запись.
+
+    «— сказал Ане» -- это дательный, то есть АДРЕСАТ, а не говорящий; но
+    попадает такое в список как отдельный персонаж «Ане». Отличить падеж
+    без морфологии нельзя, зато видно, что это форма уже известного имени:
+    основы совпадают. Побеждает более частое написание -- обычно как раз
+    именительный, которым автор вводит говорящего."""
+    best = {}
+    for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        stem = _name_stem(name)
+        if len(stem) < 2:
+            best[name] = best.get(name, 0) + n
+            continue
+        for kept in best:
+            if _name_stem(kept) == stem:
+                best[kept] += n
+                break
+        else:
+            best[name] = n
+    return dict(sorted(best.items(), key=lambda kv: -kv[1]))
 
 
 def detect_characters(lines: list) -> dict:
@@ -2363,7 +2395,7 @@ def detect_characters(lines: list) -> dict:
                      if len(w) > 2 and w[0].isupper() and w in names]
             if words:
                 found[words[0]] = found.get(words[0], 0) + 1
-    return dict(sorted(found.items(), key=lambda kv: -kv[1]))
+    return merge_name_forms(found)
 
 
 def voices_path(acc_path: str) -> str:
