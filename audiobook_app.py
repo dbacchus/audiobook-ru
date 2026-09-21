@@ -329,9 +329,13 @@ class VoiceDialog(tk.Toplevel):
         kf = ttk.Frame(self)
         kf.grid(row=3, column=0, padx=16, pady=(6, 0), sticky="w")
         ttk.Label(kf, text="Высота, ×").pack(side="left")
-        self.shift = tk.DoubleVar(value=shift or 1.0)
-        ttk.Spinbox(kf, from_=0.70, to=1.60, increment=0.02, width=6,
-                    textvariable=self.shift).pack(side="left", padx=4)
+        # Явный список, а не from_/to/increment: со второй парой стрелка
+        # вниз не уходила ниже 1.0 -- 0.70 + 15*0.02 в двоичной дроби не
+        # равно единице ровно, и шаг упирался в это.
+        steps = [f"{0.70 + i * 0.02:.2f}" for i in range(46)]
+        self.shift = tk.StringVar(value=f"{float(shift or 1.0):.2f}")
+        ttk.Spinbox(kf, values=steps, width=6, textvariable=self.shift
+                    ).pack(side="left", padx=4)
         ttk.Label(kf, text="1.0 — как есть; выше 1 — моложе, ниже 1 — старше "
                             "и крупнее. 1.28 — подобие детского, мультяшное",
                   style="Hint.TLabel").pack(side="left", padx=6)
@@ -351,14 +355,20 @@ class VoiceDialog(tk.Toplevel):
     def _voice(self):
         return self._by_title.get(self.box.get(), "")
 
+    def _shift(self) -> float:
+        try:
+            return max(0.5, min(2.0, float(self.shift.get().replace(",", "."))))
+        except ValueError:
+            return 1.0
+
     def _listen(self):
         v = self._voice()
         if v:
             self.parent.speak_text(core.SAMPLE_PHRASE, voice=v,
-                                   shift=self.shift.get())
+                                   shift=self._shift())
 
     def _ok(self):
-        self.result = (self._voice(), self.sex.get(), self.shift.get())
+        self.result = (self._voice(), self.sex.get(), self._shift())
         self.destroy()
 
 
