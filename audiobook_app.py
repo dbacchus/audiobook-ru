@@ -328,12 +328,12 @@ class VoiceDialog(tk.Toplevel):
         # в одну-две реплики лучше, чем явно взрослая женщина.
         kf = ttk.Frame(self)
         kf.grid(row=3, column=0, padx=16, pady=(6, 0), sticky="w")
-        ttk.Label(kf, text="Выше, ×").pack(side="left")
+        ttk.Label(kf, text="Высота, ×").pack(side="left")
         self.shift = tk.DoubleVar(value=shift or 1.0)
-        ttk.Spinbox(kf, from_=1.0, to=1.6, increment=0.02, width=6,
+        ttk.Spinbox(kf, from_=0.70, to=1.60, increment=0.02, width=6,
                     textvariable=self.shift).pack(side="left", padx=4)
-        ttk.Label(kf, text="1.0 — как есть; 1.28 — подобие детского, "
-                            "мультяшное: годится для эпизодической роли",
+        ttk.Label(kf, text="1.0 — как есть; выше 1 — моложе, ниже 1 — старше "
+                            "и крупнее. 1.28 — подобие детского, мультяшное",
                   style="Hint.TLabel").pack(side="left", padx=6)
 
         btns = ttk.Frame(self)
@@ -791,7 +791,7 @@ class App(tk.Tk):
                                        show="headings", height=7)
         for col, txt, w in (("who", "Персонаж", 150), ("n", "Реплик", 70),
                             ("sex", "Род", 50), ("voice", "Голос", 220),
-                            ("k", "Выше", 60)):
+                            ("k", "Высота", 66)):
             self.roles_tree.heading(col, text=txt)
             self.roles_tree.column(col, width=self.px(w),
                                    anchor="w" if col != "n" else "e")
